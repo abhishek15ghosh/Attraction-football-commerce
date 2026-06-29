@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Attraction Football | Premium Sports Store</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Oswald:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="page-shell">
+    <header class="site-header">
+      <a href="#" class="brand" aria-label="Attraction Football Home">
+        <span class="brand-mark">A</span>
+        <span class="brand-copy">
+          <strong>ATTRACTION</strong>
+          <small>FOOTBALL</small>
+        </span>
+      </a>
+
+      <nav class="main-nav" aria-label="Main navigation">
+        <a class="active" href="#">Home</a>
+        <a href="products.html">Store</a>
+        <a href="football-shoes.html">Football Shoes</a>
+        <a href="jerseys.html">Jerseys</a>
+        <a href="#categories">T-Shirts</a>
+        <a href="#products">Footballs</a>
+        <a href="#services">Accessories</a>
+      </nav>
+
+      <div class="header-actions" aria-label="Header actions">
+        <button aria-label="Search">
+          <svg viewBox="0 0 24 24"><path d="M10.8 18a7.2 7.2 0 1 1 5.06-12.32A7.2 7.2 0 0 1 10.8 18Zm0-2a5.2 5.2 0 1 0 0-10.4 5.2 5.2 0 0 0 0 10.4Zm5.7.1 4.1 4.1-1.4 1.4-4.1-4.1 1.4-1.4Z"/></svg>
+        </button>
+        <button aria-label="Account">
+          <svg viewBox="0 0 24 24"><path d="M12 12.2a4.8 4.8 0 1 1 0-9.6 4.8 4.8 0 0 1 0 9.6Zm0-2a2.8 2.8 0 1 0 0-5.6 2.8 2.8 0 0 0 0 5.6ZM3.7 21.6v-1.4c0-3.7 3.6-6.2 8.3-6.2s8.3 2.5 8.3 6.2v1.4h-2v-1.4c0-2.4-2.5-4.2-6.3-4.2s-6.3 1.8-6.3 4.2v1.4h-2Z"/></svg>
+        </button>
+        <button class="cart-button" aria-label="Cart">
+          <span class="cart-count">0</span>
+          <svg viewBox="0 0 24 24"><path d="M7 22a2 2 0 1 1 0-4 2 2 0 0 1 0 4Zm10 0a2 2 0 1 1 0-4 2 2 0 0 1 0 4ZM4.3 5 4 3H1V1h4.7l.3 2H23l-2.2 10.4A3 3 0 0 1 17.9 16H8a3 3 0 0 1-3-2.6L3.7 5h.6Zm2.1 0 1.2 8.1A1 1 0 0 0 8.6 14h9.3a1 1 0 0 0 1-.8L20.2 5H6.4Z"/></svg>
+        </button>
+        <button class="menu-toggle" type="button" aria-label="Open menu" aria-controls="mobile-drawer" aria-expanded="false">
+          <span></span>
+        </button>
+      </div>
+    </header>
+
+    <section class="hero-section" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="eyebrow">Built for players</p>
+        <h1 id="hero-title">Engineered<br>For <span>Glory</span></h1>
+        <p class="hero-text">Premium quality. Elite performance.<br>Gear that fuels your passion for the game.</p>
+        <div class="hero-buttons">
+          <a class="btn primary" href="#products">Shop Now <span>→</span></a>
+          <a class="btn ghost" href="#categories">Explore Collection</a>
+        </div>
+
+        <div class="trust-strip">
+          <div>
+            <span class="mini-icon">▣</span>
+            <strong>Premium Quality</strong>
+            <small>Elite materials</small>
+          </div>
+          <div>
+            <span class="mini-icon">▤</span>
+            <strong>Fast Delivery</strong>
+            <small>Worldwide shipping</small>
+          </div>
+          <div>
+            <span class="mini-icon">↻</span>
+            <strong>Easy Returns</strong>
+            <small>Hassle free</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-art" aria-hidden="true">
+        <div class="smoke"></div>
+        <div class="number-four">4</div>
+        <img class="hero-shoe" src="assets/hero-football-boot.png" alt="" loading="eager" decoding="async" />
+        <div class="slider-indicator">
+          <span>01</span><span>/</span><span>03</span><i></i><button>⌄</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="categories" class="category-grid" aria-label="Featured categories">
+      <article class="category-card shoe-card">
+        <div>
+          <h2>Football Shoes</h2>
+          <p>Speed. Control.<br>Dominate.</p>
+          <a href="football-shoes.html">Shop Now →</a>
+        </div>
+        <div class="category-visual shoe-mini">
+          <img class="category-shoe-img" src="assets/hero-football-boot.png" alt="" loading="lazy" decoding="async" />
+        </div>
+      </article>
+      <article class="category-card jersey-card">
+        <div>
+          <h2>Jerseys</h2>
+          <p>Wear the badge.<br>Live the passion.</p>
+          <a href="jerseys.html">Shop Now →</a>
+        </div>
+        <div class="category-visual jersey-mini">
+          <img class="category-jersey-img" src="assets/premium-football-jersey.png" alt="" loading="eager" decoding="async" />
+        </div>
+      </article>
+      <article class="category-card tshirt-card">
+        <div>
+          <h2>T-Shirts</h2>
+          <p>Comfort meets<br>Performance.</p>
+          <a href="#products">Shop Now →</a>
+        </div>
+        <div class="category-visual tshirt-mini">
+          <img class="category-tshirt-img" src="assets/premium-football-tshirt.png" alt="" loading="eager" decoding="async" />
+        </div>
+      </article>
+    </section>
+
+    <section id="products" class="products-section" aria-labelledby="products-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow lime">Featured</p>
+          <h2 id="products-title">Top Picks</h2>
+        </div>
+        <a href="products.html">View All Products →</a>
+      </div>
+
+      <div class="product-grid">
+        <article class="product-card">
+          <button class="wish" aria-label="Add Predator Elite FG to wishlist">♡</button>
+          <div class="product-image product-shoe">
+            <img class="product-shoe-img" src="assets/featured-football-boot.png" alt="" loading="eager" decoding="async" />
+          </div>
+          <h3>Predator Elite FG</h3>
+          <p>Football Shoes</p>
+          <strong>$219.99</strong>
+          <div class="color-dots"><span></span><span></span><span></span></div>
+        </article>
+        <article class="product-card">
+          <button class="wish" aria-label="Add Legendary Home Jersey to wishlist">♡</button>
+          <div class="product-image product-jersey light">
+            <img class="product-jersey-img" src="assets/premium-football-jersey.png" alt="" loading="eager" decoding="async" />
+          </div>
+          <h3>Legendary Home Jersey</h3>
+          <p>Jersey</p>
+          <strong>$89.99</strong>
+          <div class="color-dots"><span></span><span></span><span></span></div>
+        </article>
+        <article class="product-card">
+          <button class="wish" aria-label="Add Performance Tee to wishlist">♡</button>
+          <div class="product-image product-shirt">
+            <img class="product-tshirt-img" src="assets/premium-football-tshirt.png" alt="" loading="eager" decoding="async" />
+          </div>
+          <h3>Performance Tee</h3>
+          <p>T-Shirt</p>
+          <strong>$39.99</strong>
+          <div class="color-dots"><span></span><span></span><span></span></div>
+        </article>
+        <article class="product-card">
+          <button class="wish" aria-label="Add Premier Match Ball to wishlist">♡</button>
+          <div class="product-image product-ball">
+            <img class="product-ball-img" src="assets/premium-match-football.png" alt="" loading="eager" decoding="async" />
+          </div>
+          <h3>Premier Match Ball</h3>
+          <p>Football</p>
+          <strong>$59.99</strong>
+          <div class="color-dots"><span></span><span></span><span></span></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="promo-banner" aria-label="New collection banner">
+      <div class="promo-copy">
+        <p class="eyebrow lime">New Collection</p>
+        <h2>Rise Beyond<br><span>Limits</span></h2>
+        <p>Discover the latest collection crafted for champions.</p>
+        <a class="btn primary" href="#">Explore Now <span>→</span></a>
+      </div>
+      <div class="promo-visual" aria-hidden="true">
+        <img class="promo-player-img" src="assets/promo-football-player.png" alt="" loading="eager" decoding="async" />
+      </div>
+    </section>
+
+    <section id="services" class="service-bar" aria-label="Store benefits">
+      <article>
+        <span>▣</span>
+        <div><strong>Secure Payments</strong><small>100% secure checkout</small></div>
+      </article>
+      <article>
+        <span>⬡</span>
+        <div><strong>Authentic Products</strong><small>Official & genuine gear</small></div>
+      </article>
+      <article>
+        <span>▤</span>
+        <div><strong>Worldwide Shipping</strong><small>Delivering to your door</small></div>
+      </article>
+      <article>
+        <span>☏</span>
+        <div><strong>24/7 Customer Support</strong><small>We are here to help</small></div>
+      </article>
+    </section>
+
+    <footer class="site-footer" aria-labelledby="footer-title">
+      <div class="footer-grid">
+        <section class="footer-brand-block" aria-labelledby="footer-title">
+          <a href="#" class="footer-brand" aria-label="Attraction Football Home">
+            <span class="brand-mark">A</span>
+            <span>
+              <strong id="footer-title">Attraction Football</strong>
+              <small>Premium Football Store</small>
+            </span>
+          </a>
+          <p>Premium football boots, jerseys, t-shirts, balls, and performance gear built for players.</p>
+          <p class="footer-note">Engineered for match days, training sessions, and the football lifestyle beyond the pitch.</p>
+
+          <address class="footer-contact" aria-label="Contact information">
+            <a href="mailto:support@attractionfootball.com">support@attractionfootball.com</a>
+            <a href="tel:+919876543210">+91&nbsp;98765&nbsp;43210</a>
+            <span>India</span>
+            <span>24/7 Customer Support</span>
+          </address>
+
+          <div class="footer-socials" aria-label="Social media links">
+            <a href="#" aria-label="Instagram">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.8 2h8.4A5.8 5.8 0 0 1 22 7.8v8.4a5.8 5.8 0 0 1-5.8 5.8H7.8A5.8 5.8 0 0 1 2 16.2V7.8A5.8 5.8 0 0 1 7.8 2Zm0 2A3.8 3.8 0 0 0 4 7.8v8.4A3.8 3.8 0 0 0 7.8 20h8.4a3.8 3.8 0 0 0 3.8-3.8V7.8A3.8 3.8 0 0 0 16.2 4H7.8Zm4.2 3.2a4.8 4.8 0 1 1 0 9.6 4.8 4.8 0 0 1 0-9.6Zm0 2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6Zm5.1-2.4a1.1 1.1 0 1 1 0 2.2 1.1 1.1 0 0 1 0-2.2Z"/></svg>
+            </a>
+            <a href="#" aria-label="Facebook">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.6 22v-8h2.7l.4-3.1h-3.1V8.8c0-.9.3-1.5 1.6-1.5h1.7V4.5c-.8-.1-1.6-.2-2.5-.2-2.5 0-4.1 1.5-4.1 4.2v2.4H7.5V14h2.8v8h3.3Z"/></svg>
+            </a>
+            <a href="#" aria-label="X/Twitter">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3.4 3 7.1 9.4L3 21h3.1l5.9-6.7 5 6.7h3.6l-7.4-9.9L20.2 3h-3.1l-5.5 6.2L7 3H3.4Zm4.2 2 9 12h-1.2L6.4 5h1.2Z"/></svg>
+            </a>
+            <a href="#" aria-label="YouTube">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.6 7.2a3 3 0 0 0-2.1-2.1C17.7 4.6 12 4.6 12 4.6s-5.7 0-7.5.5a3 3 0 0 0-2.1 2.1C2 9 2 12 2 12s0 3 .4 4.8a3 3 0 0 0 2.1 2.1c1.8.5 7.5.5 7.5.5s5.7 0 7.5-.5a3 3 0 0 0 2.1-2.1C22 15 22 12 22 12s0-3-.4-4.8ZM10 15.5v-7l6 3.5-6 3.5Z"/></svg>
+            </a>
+          </div>
+        </section>
+
+        <nav class="footer-column" aria-labelledby="footer-shop">
+          <h3 id="footer-shop">Shop</h3>
+          <a href="football-shoes.html">Football Shoes</a>
+          <a href="jerseys.html">Jerseys</a>
+          <a href="#categories">T-Shirts</a>
+          <a href="#products">Footballs</a>
+          <a href="#services">Accessories</a>
+          <a href="#">New Collection</a>
+        </nav>
+
+        <nav class="footer-column" aria-labelledby="footer-support">
+          <h3 id="footer-support">Support</h3>
+          <a href="#">Contact Us</a>
+          <a href="#">Shipping & Delivery</a>
+          <a href="#">Returns & Exchanges</a>
+          <a href="#">Size Guide</a>
+          <a href="#">Track Order</a>
+          <a href="#">FAQs</a>
+        </nav>
+
+        <nav class="footer-column" aria-labelledby="footer-company">
+          <h3 id="footer-company">Company</h3>
+          <a href="#">About Us</a>
+          <a href="#">Our Story</a>
+          <a href="#">Careers</a>
+          <a href="#">Privacy Policy</a>
+          <a href="#">Terms & Conditions</a>
+        </nav>
+
+        <section class="footer-newsletter" aria-labelledby="footer-newsletter-title">
+          <p class="eyebrow lime">Newsletter</p>
+          <h3 id="footer-newsletter-title">Join the Club</h3>
+          <p>Get new drops, exclusive offers, and football gear updates.</p>
+          <form class="newsletter-form" aria-label="Newsletter signup">
+            <label class="sr-only" for="footer-email">Email address</label>
+            <input id="footer-email" name="email" type="email" placeholder="Email address" autocomplete="email" />
+            <button type="button">Subscribe</button>
+          </form>
+        </section>
+      </div>
+
+      <div class="footer-trust" aria-label="Payment and trust guarantees">
+        <span>Secure Payments</span>
+        <span>Authentic Products</span>
+        <span>Fast Delivery</span>
+        <span>Easy Returns</span>
+        <span>SSL Protected</span>
+      </div>
+
+      <div class="footer-bottom">
+        <p>© 2026 Attraction Football. All rights reserved.</p>
+        <nav aria-label="Footer legal links">
+          <a href="#">Privacy Policy</a>
+          <a href="#">Terms</a>
+          <a href="#">Cookies</a>
+        </nav>
+      </div>
+    </footer>
+  </main>
+
+  <div class="drawer-overlay" data-drawer-overlay></div>
+  <aside id="mobile-drawer" class="mobile-drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <h3>Menu</h3>
+      <button class="close-btn" type="button" data-close-menu aria-label="Close menu">×</button>
+    </div>
+    <div class="drawer-actions" aria-label="Drawer actions">
+      <button type="button" data-drawer-search>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.8 18a7.2 7.2 0 1 1 5.06-12.32A7.2 7.2 0 0 1 10.8 18Zm0-2a5.2 5.2 0 1 0 0-10.4 5.2 5.2 0 0 0 0 10.4Zm5.7.1 4.1 4.1-1.4 1.4-4.1-4.1 1.4-1.4Z"/></svg>
+        <span>Search</span>
+      </button>
+      <button type="button" data-drawer-account>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12.2a4.8 4.8 0 1 1 0-9.6 4.8 4.8 0 0 1 0 9.6Zm0-2a2.8 2.8 0 1 0 0-5.6 2.8 2.8 0 0 0 0 5.6ZM3.7 21.6v-1.4c0-3.7 3.6-6.2 8.3-6.2s8.3 2.5 8.3 6.2v1.4h-2v-1.4c0-2.4-2.5-4.2-6.3-4.2s-6.3 1.8-6.3 4.2v1.4h-2Z"/></svg>
+        <span>Account</span>
+      </button>
+    </div>
+    <nav class="mobile-drawer-nav" aria-label="Mobile navigation">
+      <a href="#">Home</a>
+      <a href="products.html">Store</a>
+      <a href="football-shoes.html">Football Shoes</a>
+      <a href="jerseys.html">Jerseys</a>
+      <a href="#categories">T-Shirts</a>
+      <a href="#products">Footballs</a>
+      <a href="#services">Accessories</a>
+    </nav>
+  </aside>
+
+  <script src="script.js" defer></script>
+</body>
+</html>
