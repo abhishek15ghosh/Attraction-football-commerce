@@ -270,6 +270,20 @@ test("t-shirt category and featured product cards show premium t-shirt image wit
   await tshirtProductCard.screenshot({ path: path.join(screenshotDir, "tshirt-product-card.png") });
 });
 
+test("homepage t-shirts category card opens dedicated t-shirts page", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/index.html#categories");
+
+  const tshirtCategoryCard = page.locator(".category-grid .tshirt-card");
+  await expect(tshirtCategoryCard).toBeVisible();
+  await expect(tshirtCategoryCard).toHaveAttribute("href", "t-shirts.html");
+  await tshirtCategoryCard.screenshot({ path: path.join(screenshotDir, "tshirts-category-card-navigation.png") });
+
+  await tshirtCategoryCard.click();
+  await expect(page).toHaveURL(/t-shirts\.html$/);
+  await expect(page.getByRole("heading", { name: /20 Premium T-Shirts/i, level: 2 })).toBeVisible();
+});
+
 test("featured football product card shows premium match ball image without layout overflow", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
@@ -609,4 +623,68 @@ test("jerseys nav opens dedicated category page with filters search cart wishlis
   await expectNoHorizontalOverflow(page);
   await waitForImages(page.locator(".jerseys-grid .product-card:nth-child(-n + 2) img"));
   await page.locator(".jerseys-section").screenshot({ path: path.join(screenshotDir, "jerseys-mobile.png") });
+});
+
+test("t-shirts nav opens dedicated category page with filters search sort cart wishlist and responsive layout", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/");
+
+  const desktopNav = page.locator(".main-nav");
+  await desktopNav.getByRole("link", { name: "T-Shirts", exact: true }).click();
+  await expect(page).toHaveURL(/t-shirts\.html$/);
+  await expect(page.locator(".main-nav a.active")).toHaveText("T-Shirts");
+  await expect(page.getByRole("heading", { name: "PREMIUM T-SHIRTS", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /20 Premium T-Shirts/i, level: 2 })).toBeVisible();
+  await expect(page.getByText("Explore premium football training tees, matchday t-shirts, and performance wear built for comfort and speed.")).toBeVisible();
+  await expect(page.locator(".product-card")).toHaveCount(20);
+  await expectNoHorizontalOverflow(page);
+  await waitForImages(page.locator(".tshirts-grid .product-card:nth-child(-n + 8) img"));
+  await page.screenshot({ path: path.join(screenshotDir, "t-shirts-desktop.png"), fullPage: false });
+
+  const searchInput = page.locator("#tshirts-search");
+  await searchInput.fill("compression");
+  await expect.poll(() => visibleProductCount(page)).toBe(3);
+  await expect(page.locator(".product-card", { hasText: "Elite Compression Tee" })).toBeVisible();
+
+  await searchInput.fill("");
+  await expect.poll(() => visibleProductCount(page)).toBe(20);
+
+  const filters = page.locator(".filter-wrap");
+  await filters.getByRole("button", { name: "Lifestyle", exact: true }).click({ force: true });
+  await expect.poll(() => visibleProductCount(page)).toBe(4);
+  await expect(page.locator(".product-card", { hasText: "Premium Club Tee" })).toBeVisible();
+
+  await filters.getByRole("button", { name: "All", exact: true }).click({ force: true });
+  await expect.poll(() => visibleProductCount(page)).toBe(20);
+
+  await page.getByLabel("Sort").selectOption("price-low");
+  await expect(page.locator(".product-card h3").first()).toHaveText("Fan Edition Logo Tee");
+
+  const firstProduct = page.locator(".product-card", { hasText: "Fan Edition Logo Tee" });
+  await firstProduct.getByRole("button", { name: "Add to Cart" }).click();
+  await expect(page.locator(".cart-count")).toHaveText("1");
+
+  const wishlistButton = firstProduct.getByLabel("Add Fan Edition Logo Tee to wishlist");
+  await wishlistButton.click();
+  await expect(wishlistButton).toHaveClass(/is-active/);
+  await expect(wishlistButton).toHaveText("♥");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+
+  const drawer = page.locator("#mobile-drawer");
+  await page.locator(".menu-toggle").click();
+  await expect(drawer).toHaveClass(/open/);
+  const drawerTshirtsLink = drawer.locator(".mobile-drawer-nav").getByRole("link", { name: "T-Shirts", exact: true });
+  await expect(drawerTshirtsLink).toHaveAttribute("href", "t-shirts.html");
+  await drawerTshirtsLink.click();
+  await expect(page).toHaveURL(/t-shirts\.html$/);
+  await expect(page.getByRole("heading", { name: "PREMIUM T-SHIRTS", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /20 Premium T-Shirts/i, level: 2 })).toBeVisible();
+  await expect(page.locator(".product-card")).toHaveCount(20);
+  await expect(page.locator("#tshirts-search")).toBeVisible();
+
+  await expectNoHorizontalOverflow(page);
+  await waitForImages(page.locator(".tshirts-grid .product-card:nth-child(-n + 2) img"));
+  await page.locator(".tshirts-section").screenshot({ path: path.join(screenshotDir, "t-shirts-mobile.png") });
 });

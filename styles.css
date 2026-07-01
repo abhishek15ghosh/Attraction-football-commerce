@@ -650,11 +650,16 @@ button {
 }
 
 .category-card a,
+.category-card-action,
 .section-heading a {
   font-size: 12px;
   font-weight: 900;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+.category-card-action {
+  display: inline-block;
 }
 
 .category-visual {
@@ -1327,6 +1332,79 @@ button {
   width: min(72%, 174px);
   max-height: 226px;
   transform: translateY(4px);
+}
+
+.tshirts-grid .product-shirt {
+  overflow: visible;
+}
+
+.tshirts-grid .product-tshirt-img {
+  width: min(78%, 188px);
+  max-height: 226px;
+  object-fit: contain;
+  transform: translateY(6px);
+  filter:
+    drop-shadow(0 24px 30px rgba(0, 0, 0, 0.68))
+    drop-shadow(0 0 14px rgba(207, 255, 32, 0.12));
+}
+
+.tshirts-grid .tshirt-page-img-travel,
+.tshirts-grid .tshirt-page-img-fan,
+.tshirts-grid .tshirt-page-img-away-day,
+.tshirts-grid .tshirt-page-img-urban,
+.tshirts-grid .tshirt-page-img-logo,
+.tshirts-grid .tshirt-page-img-travel-club {
+  width: min(74%, 180px);
+  max-height: 224px;
+  transform: translateY(7px);
+  filter:
+    brightness(1.06)
+    contrast(1.04)
+    drop-shadow(0 24px 30px rgba(0, 0, 0, 0.68))
+    drop-shadow(0 0 14px rgba(209, 161, 43, 0.12));
+}
+
+.tshirts-grid .tshirt-page-img-training,
+.tshirts-grid .tshirt-page-img-neon,
+.tshirts-grid .tshirt-page-img-warmup,
+.tshirts-grid .tshirt-page-img-mesh {
+  width: min(76%, 184px);
+  max-height: 226px;
+  transform: translateY(6px);
+  filter:
+    brightness(1.08)
+    contrast(1.05)
+    drop-shadow(0 24px 30px rgba(0, 0, 0, 0.68))
+    drop-shadow(0 0 15px rgba(207, 255, 32, 0.15));
+}
+
+.tshirts-grid .tshirt-page-img-compression,
+.tshirts-grid .tshirt-page-img-recovery,
+.tshirts-grid .tshirt-page-img-base-layer {
+  width: min(70%, 170px);
+  max-height: 224px;
+  transform: translateY(8px) scaleX(0.92);
+  filter:
+    brightness(0.96)
+    contrast(1.14)
+    drop-shadow(0 24px 30px rgba(0, 0, 0, 0.7))
+    drop-shadow(0 0 13px rgba(207, 255, 32, 0.12));
+}
+
+.tshirts-grid .tshirt-page-img-blackout,
+.tshirts-grid .tshirt-page-img-carbon,
+.tshirts-grid .tshirt-page-img-club,
+.tshirts-grid .tshirt-page-img-pro,
+.tshirts-grid .tshirt-page-img-limited {
+  width: min(78%, 188px);
+  max-height: 228px;
+  transform: translateY(5px);
+  filter:
+    brightness(0.92)
+    contrast(1.12)
+    saturate(1.06)
+    drop-shadow(0 24px 30px rgba(0, 0, 0, 0.72))
+    drop-shadow(0 0 16px rgba(207, 255, 32, 0.14));
 }
 
 .catalog-card .product-ball-img {

@@ -831,7 +831,7 @@
             <a href="products.html">Store</a>
             <a href="football-shoes.html">Football Shoes</a>
             <a href="jerseys.html">Jerseys</a>
-            <a href="#categories">T-Shirts</a>
+            <a href="t-shirts.html">T-Shirts</a>
             <a href="#products">Footballs</a>
             <a href="#services">Accessories</a>
           `}
