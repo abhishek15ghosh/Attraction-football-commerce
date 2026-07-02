@@ -1407,6 +1407,15 @@ button {
     drop-shadow(0 0 16px rgba(207, 255, 32, 0.14));
 }
 
+.tshirts-grid .tshirt-row-5-img {
+  width: min(68%, 170px);
+  height: 190px;
+  max-height: 190px;
+  object-fit: contain;
+  object-position: center center;
+  transform: none;
+}
+
 .catalog-card .product-ball-img {
   width: min(76%, 202px);
   max-height: 216px;
