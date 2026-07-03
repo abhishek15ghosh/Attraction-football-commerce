@@ -625,6 +625,75 @@ test("jerseys nav opens dedicated category page with filters search cart wishlis
   await page.locator(".jerseys-section").screenshot({ path: path.join(screenshotDir, "jerseys-mobile.png") });
 });
 
+
+test("footballs nav opens dedicated category page with filters search sort cart wishlist and responsive layout", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/");
+
+  const desktopNav = page.locator(".main-nav");
+  await desktopNav.getByRole("link", { name: "Footballs", exact: true }).click();
+  await expect(page).toHaveURL(/footballs\.html$/);
+  await expect(page.locator(".main-nav a.active")).toHaveText("Footballs");
+  await expect(page.getByRole("heading", { name: "PREMIUM FOOTBALLS", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "20 PREMIUM FOOTBALLS", level: 2 })).toBeVisible();
+  await expect(page.locator(".product-card")).toHaveCount(20);
+  const footballImageSources = await page.locator(".footballs-grid .product-card img").evaluateAll((images) =>
+    images.map((image) => image.getAttribute("src"))
+  );
+  expect(footballImageSources).toHaveLength(20);
+  expect(new Set(footballImageSources).size).toBe(20);
+  await expectNoHorizontalOverflow(page);
+  await waitForImages(page.locator(".footballs-grid .product-card:nth-child(-n + 8) img"));
+  await page.screenshot({ path: path.join(screenshotDir, "footballs-desktop.png"), fullPage: false });
+
+  const searchInput = page.locator("#footballs-search");
+  await searchInput.fill("blackout");
+  await expect.poll(() => visibleProductCount(page)).toBe(1);
+  await expect(page.locator(".product-card", { hasText: "Blackout Match Ball" })).toBeVisible();
+
+  await searchInput.fill("");
+  await expect.poll(() => visibleProductCount(page)).toBe(20);
+
+  const filters = page.locator(".filter-wrap");
+  await filters.getByRole("button", { name: "Street & Futsal", exact: true }).click({ force: true });
+  await expect.poll(() => visibleProductCount(page)).toBe(4);
+  await expect(page.locator(".product-card", { hasText: "Urban Futsal Ball" })).toBeVisible();
+
+  await filters.getByRole("button", { name: "All", exact: true }).click({ force: true });
+  await expect.poll(() => visibleProductCount(page)).toBe(20);
+
+  await page.getByLabel("Sort").selectOption("price-low");
+  await expect(page.locator(".product-card h3").first()).toHaveText("Training Lite Ball");
+
+  const firstProduct = page.locator(".product-card", { hasText: "Training Lite Ball" });
+  await firstProduct.getByRole("button", { name: "Add to Cart" }).click();
+  await expect(page.locator(".cart-count")).toHaveText("1");
+
+  const wishlistButton = firstProduct.getByLabel("Add Training Lite Ball to wishlist");
+  await wishlistButton.click();
+  await expect(wishlistButton).toHaveClass(/is-active/);
+  await expect(wishlistButton).toHaveText("♥");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+
+  const drawer = page.locator("#mobile-drawer");
+  await page.locator(".menu-toggle").click();
+  await expect(drawer).toHaveClass(/open/);
+  const drawerFootballsLink = drawer.locator(".mobile-drawer-nav").getByRole("link", { name: "Footballs", exact: true });
+  await expect(drawerFootballsLink).toHaveAttribute("href", "footballs.html");
+  await drawerFootballsLink.click();
+  await expect(page).toHaveURL(/footballs\.html$/);
+  await expect(page.getByRole("heading", { name: "PREMIUM FOOTBALLS", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "20 PREMIUM FOOTBALLS", level: 2 })).toBeVisible();
+  await expect(page.locator(".product-card")).toHaveCount(20);
+  await expect(page.locator("#footballs-search")).toBeVisible();
+
+  await expectNoHorizontalOverflow(page);
+  await waitForImages(page.locator(".footballs-grid .product-card:nth-child(-n + 2) img"));
+  await page.locator(".footballs-section").screenshot({ path: path.join(screenshotDir, "footballs-mobile.png") });
+});
+
 test("t-shirts nav opens dedicated category page with filters search sort cart wishlist and responsive layout", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/");

@@ -832,7 +832,7 @@
             <a href="football-shoes.html">Football Shoes</a>
             <a href="jerseys.html">Jerseys</a>
             <a href="t-shirts.html">T-Shirts</a>
-            <a href="#products">Footballs</a>
+            <a href="footballs.html">Footballs</a>
             <a href="#services">Accessories</a>
           `}
         </nav>
