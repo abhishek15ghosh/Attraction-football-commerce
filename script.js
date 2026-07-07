@@ -1,6 +1,6 @@
 /* Attraction Football Store Interactions
-   Features: cart, filters, search, carousel, mobile menu, wishlist, login popup.
-   Add before </body>: <script src="script.js" defer></script>
+   Features: cart, filters, search, carousel, mobile menu, wishlist, Supabase auth.
+   Add Supabase JS before this file, then add before </body>: <script src="script.js" defer></script>
 */
 
 (() => {
@@ -12,8 +12,15 @@
   const STORAGE_KEYS = {
     cart: "attraction_cart_v1",
     wishlist: "attraction_wishlist_v1",
-    user: "attraction_user_v1",
   };
+
+  const SUPABASE_URL = "https://jvpejotupbiagwqqzzha.supabase.co";
+  const SUPABASE_ANON_KEY = "sb_publishable_bax_rqRGPvefYdHe9hpvYw_LVKcuj5I";
+  const supabaseClient =
+    window.__attractionSupabaseClient ||
+    (window.supabase?.createClient
+      ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+      : null);
 
   const readStorage = (key, fallback) => {
     try {
@@ -37,6 +44,7 @@
   let activeCategory = "All";
   let searchTerm = "";
   let currentSlide = 0;
+  let authUser = null;
 
   const productCards = $$(".product-card");
   const cartButton = $(".cart-button");
@@ -299,10 +307,19 @@
         opacity: 0;
         transition: transform .25s ease, opacity .25s ease;
       }
+      .login-modal__box {
+        width: min(94vw, 520px);
+        max-height: min(90vh, 760px);
+        overflow-y: auto;
+      }
       .login-modal.is-open .login-modal__box,
       .search-modal.is-open .search-modal__box {
         transform: translate(-50%, -50%) scale(1);
         opacity: 1;
+      }
+      .login-form[hidden],
+      .register-form[hidden] {
+        display: none;
       }
       .form-field {
         display: grid;
@@ -335,6 +352,56 @@
         font-size: 13px;
         line-height: 1.6;
         margin: 14px 0 0;
+      }
+      .auth-switch {
+        margin: 16px 0 0;
+        color: #d7d9d3;
+        font-size: 13px;
+        line-height: 1.5;
+        text-align: center;
+      }
+      .auth-link {
+        border: 0;
+        padding: 0;
+        background: transparent;
+        color: var(--lime);
+        cursor: pointer;
+        font-weight: 900;
+        text-transform: none;
+      }
+      .auth-link:hover {
+        text-decoration: underline;
+      }
+      .auth-message {
+        margin: 0 0 14px;
+        padding: 12px 14px;
+        border-radius: 10px;
+        font-size: 13px;
+        font-weight: 800;
+        line-height: 1.45;
+      }
+      .auth-error {
+        border: 1px solid rgba(255,92,92,.36);
+        color: #ffd7d7;
+        background: rgba(255,92,92,.12);
+      }
+      .auth-success {
+        border: 1px solid rgba(207,255,32,.36);
+        color: var(--lime);
+        background: rgba(207,255,32,.1);
+      }
+      .account-panel[hidden] {
+        display: none;
+      }
+      .account-panel h4 {
+        margin: 8px 0 8px;
+        font-family: var(--font-heading);
+        font-size: 30px;
+        line-height: 1;
+        text-transform: uppercase;
+      }
+      .account-panel .login-submit {
+        margin-top: 18px;
       }
       .toast {
         position: fixed;
@@ -387,6 +454,24 @@
         .filter-wrap { margin-inline: 0; }
         .mobile-panel__content,
         .cart-drawer__content { padding: 22px; }
+        .login-modal__box {
+          width: min(94vw, 360px);
+          padding: 22px;
+          border-radius: 14px;
+        }
+        .login-modal__box .modal-head {
+          margin-bottom: 22px;
+        }
+        .login-modal__box .modal-head h3 {
+          font-size: 28px;
+        }
+        .form-field {
+          margin-bottom: 14px;
+        }
+        .form-field input {
+          min-height: 48px;
+          padding: 13px 14px;
+        }
       }
     `;
     document.head.appendChild(style);
@@ -709,46 +794,301 @@
     document.body.classList.remove("no-scroll");
   }
 
+  const getAuthEmail = () => authUser?.email || "";
+
+  function getAuthName() {
+    return authUser?.user_metadata?.full_name || getAuthEmail() || "Player";
+  }
+
+  function getFriendlyAuthError(error) {
+    const message = error?.message || "Authentication request failed. Please try again.";
+    const normalized = message.toLowerCase();
+
+    if (normalized.includes("invalid login")) return "Invalid login credentials.";
+    if (normalized.includes("email not confirmed") || normalized.includes("confirm your email")) {
+      return "Please confirm your email before logging in.";
+    }
+    if (normalized.includes("already") && (normalized.includes("registered") || normalized.includes("exists"))) {
+      return "Account already exists.";
+    }
+    if (normalized.includes("password")) return message;
+
+    return message;
+  }
+
+  function resetAuthFeedback(modal) {
+    $$("[data-auth-message]", modal).forEach((message) => {
+      message.hidden = true;
+      message.textContent = "";
+    });
+  }
+
+  function showAuthMessage(modal, targetName, type, message) {
+    const target = $(`[data-${targetName}-${type}]`, modal);
+    if (!target) return;
+    resetAuthFeedback(modal);
+    target.textContent = message;
+    target.hidden = false;
+  }
+
+  function updateAuthUI() {
+    accountButton?.classList.toggle("is-authenticated", Boolean(authUser));
+    accountButton?.setAttribute("title", authUser ? `Logged in as ${getAuthEmail()}` : "Account");
+
+    const modal = $(".login-modal");
+    if (!modal) return;
+
+    const accountName = $("[data-account-name]", modal);
+    const accountEmail = $("[data-account-email]", modal);
+
+    if (accountName) accountName.textContent = getAuthName();
+    if (accountEmail) accountEmail.textContent = getAuthEmail();
+  }
+
+  async function initSupabaseAuth() {
+    if (!supabaseClient) {
+      updateAuthUI();
+      return;
+    }
+
+    try {
+      const { data, error } = await supabaseClient.auth.getSession();
+      if (error) throw error;
+      authUser = data?.session?.user || null;
+      updateAuthUI();
+
+      supabaseClient.auth.onAuthStateChange((_event, session) => {
+        authUser = session?.user || null;
+        updateAuthUI();
+      });
+    } catch (error) {
+      console.warn("Supabase auth session check failed", error);
+      authUser = null;
+      updateAuthUI();
+    }
+  }
+
+  function setAuthMode(mode) {
+    const modal = $(".login-modal");
+    if (!modal) return;
+
+    const isRegister = mode === "register";
+    const isAccount = mode === "account";
+    const title = $("[data-auth-title]", modal);
+    const loginForm = $("[data-login-form]", modal);
+    const registerForm = $("[data-register-form]", modal);
+    const accountPanel = $("[data-account-panel]", modal);
+
+    if (title) title.textContent = isRegister ? "Register" : isAccount ? "Account" : "Login";
+    if (loginForm) loginForm.hidden = isRegister || isAccount;
+    if (registerForm) registerForm.hidden = !isRegister;
+    if (accountPanel) accountPanel.hidden = !isAccount;
+    updateAuthUI();
+  }
+
   function createLoginModal() {
     if ($(".login-modal")) return;
 
-    const savedUser = readStorage(STORAGE_KEYS.user, null);
     const modal = document.createElement("div");
     modal.className = "login-modal";
     modal.innerHTML = `
-      <div class="login-modal__box" role="dialog" aria-modal="true" aria-label="Login popup">
+      <div class="login-modal__box" role="dialog" aria-modal="true" aria-label="Account access">
         <div class="modal-head">
-          <h3>${savedUser ? "Account" : "Login"}</h3>
+          <h3 data-auth-title>Login</h3>
           <button class="close-btn" type="button" data-close-login aria-label="Close login">×</button>
         </div>
-        <form class="login-form">
+        <form class="login-form" data-login-form>
           <div class="form-field">
             <label for="login-email">Email</label>
-            <input id="login-email" type="email" value="${savedUser?.email || ""}" placeholder="you@example.com" required />
+            <input id="login-email" type="email" placeholder="you@example.com" autocomplete="email" required />
           </div>
           <div class="form-field">
             <label for="login-password">Password</label>
-            <input id="login-password" type="password" placeholder="Enter password" required />
+            <input id="login-password" type="password" placeholder="Enter password" autocomplete="current-password" required />
           </div>
-          <button class="login-submit" type="submit">${savedUser ? "Update Login" : "Login"}</button>
-          <p class="login-note">Demo login only. Connect Firebase, Supabase, or your backend for real authentication.</p>
+          <p class="auth-message auth-error" data-login-error data-auth-message role="alert" hidden></p>
+          <p class="auth-message auth-success" data-login-success data-auth-message role="status" aria-live="polite" hidden></p>
+          <button class="login-submit" type="submit">Login</button>
+          <p class="auth-switch">New here? <button class="auth-link" type="button" data-show-register>Create an account</button></p>
+          <p class="login-note">Secure login powered by Supabase Auth.</p>
         </form>
+        <form class="register-form" data-register-form hidden>
+          <div class="form-field">
+            <label for="register-name">Full Name</label>
+            <input id="register-name" name="full-name" type="text" placeholder="Your full name" autocomplete="name" required />
+          </div>
+          <div class="form-field">
+            <label for="register-email">Email Address</label>
+            <input id="register-email" name="email" type="email" placeholder="you@example.com" autocomplete="email" required />
+          </div>
+          <div class="form-field">
+            <label for="register-phone">Phone Number</label>
+            <input id="register-phone" name="phone" type="tel" placeholder="+91 98765 43210" autocomplete="tel" required />
+          </div>
+          <div class="form-field">
+            <label for="register-password">Password</label>
+            <input id="register-password" name="password" type="password" placeholder="Create password" autocomplete="new-password" required />
+          </div>
+          <div class="form-field">
+            <label for="register-confirm-password">Confirm Password</label>
+            <input id="register-confirm-password" name="confirm-password" type="password" placeholder="Confirm password" autocomplete="new-password" required />
+          </div>
+          <p class="auth-message auth-error" data-register-error data-auth-message role="alert" hidden></p>
+          <p class="auth-message auth-success" data-register-success data-auth-message role="status" aria-live="polite" hidden></p>
+          <button class="login-submit" type="submit">Create Account</button>
+          <p class="auth-switch">Already have an account? <button class="auth-link" type="button" data-show-login>Login</button></p>
+          <p class="login-note">Your account is created with Supabase Auth. Never share your password.</p>
+        </form>
+        <section class="account-panel" data-account-panel hidden>
+          <p class="eyebrow lime">Signed In</p>
+          <h4 data-account-name>Player</h4>
+          <p class="login-note">Logged in as: <strong data-account-email></strong></p>
+          <p class="auth-message auth-error" data-account-error data-auth-message role="alert" hidden></p>
+          <button class="login-submit" type="button" data-logout>Logout</button>
+        </section>
       </div>
     `;
     document.body.appendChild(modal);
 
     modal.addEventListener("click", (event) => {
       if (event.target === modal || event.target.matches("[data-close-login]")) closeLogin();
+
+      if (event.target.closest("[data-show-register]")) {
+        event.preventDefault();
+        resetAuthFeedback(modal);
+        setAuthMode("register");
+        window.setTimeout(() => $("#register-name", modal)?.focus(), 60);
+      }
+
+      if (event.target.closest("[data-show-login]")) {
+        event.preventDefault();
+        resetAuthFeedback(modal);
+        setAuthMode("login");
+        window.setTimeout(() => $("#login-email", modal)?.focus(), 60);
+      }
+
+      if (event.target.closest("[data-logout]")) {
+        event.preventDefault();
+        handleLogout(modal);
+      }
     });
 
-    $(".login-form", modal)?.addEventListener("submit", (event) => {
+    $(".login-form", modal)?.addEventListener("submit", async (event) => {
       event.preventDefault();
+      const form = event.currentTarget;
       const email = $("#login-email", modal)?.value.trim();
-      if (!email) return;
-      writeStorage(STORAGE_KEYS.user, { email });
-      showToast("Login saved for demo");
-      closeLogin();
+      const password = $("#login-password", modal)?.value;
+
+      resetAuthFeedback(modal);
+
+      if (!form.checkValidity()) {
+        form.reportValidity();
+        return;
+      }
+
+      if (!supabaseClient) {
+        showAuthMessage(modal, "login", "error", "Supabase authentication could not load. Please check your connection and try again.");
+        return;
+      }
+
+      try {
+        const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+
+        authUser = data?.user || data?.session?.user || null;
+        updateAuthUI();
+        showToast("Logged in successfully");
+        closeLogin();
+      } catch (error) {
+        showAuthMessage(modal, "login", "error", getFriendlyAuthError(error));
+      }
     });
+
+    $(".register-form", modal)?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const fullName = $("#register-name", modal)?.value.trim();
+      const email = $("#register-email", modal)?.value.trim();
+      const phone = $("#register-phone", modal)?.value.trim();
+      const password = $("#register-password", modal)?.value;
+      const confirmPassword = $("#register-confirm-password", modal)?.value;
+      const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+      resetAuthFeedback(modal);
+
+      if (!form.checkValidity()) {
+        form.reportValidity();
+        return;
+      }
+
+      if (!fullName || !email || !phone || !password || !confirmPassword) {
+        form.reportValidity();
+        return;
+      }
+
+      if (!emailPattern.test(email)) {
+        showAuthMessage(modal, "register", "error", "Please enter a valid email address.");
+        return;
+      }
+
+      if (password !== confirmPassword) {
+        showAuthMessage(modal, "register", "error", "Passwords do not match.");
+        return;
+      }
+
+      if (!supabaseClient) {
+        showAuthMessage(modal, "register", "error", "Supabase authentication could not load. Please check your connection and try again.");
+        return;
+      }
+
+      try {
+        const { data, error } = await supabaseClient.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              full_name: fullName,
+              phone,
+            },
+          },
+        });
+
+        if (error) throw error;
+
+        authUser = data?.session?.user || null;
+        updateAuthUI();
+
+        if (data?.session) {
+          showAuthMessage(modal, "register", "success", "Account created successfully. You are now logged in.");
+          showToast("Account created successfully");
+        } else {
+          showAuthMessage(modal, "register", "success", "Account created successfully. Please check your email to confirm your account.");
+        }
+      } catch (error) {
+        showAuthMessage(modal, "register", "error", getFriendlyAuthError(error));
+      }
+    });
+  }
+
+  async function handleLogout(modal = $(".login-modal")) {
+    resetAuthFeedback(modal || document);
+
+    if (!supabaseClient) {
+      showAuthMessage(modal, "account", "error", "Supabase authentication could not load. Please check your connection and try again.");
+      return;
+    }
+
+    try {
+      const { error } = await supabaseClient.auth.signOut();
+      if (error) throw error;
+
+      authUser = null;
+      updateAuthUI();
+      closeLogin();
+      showToast("Logged out successfully");
+    } catch (error) {
+      showAuthMessage(modal, "account", "error", getFriendlyAuthError(error));
+    }
   }
 
   function openLogin() {
@@ -756,12 +1096,17 @@
     const modal = $(".login-modal");
     modal?.classList.add("is-open");
     document.body.classList.add("no-scroll");
-    window.setTimeout(() => $("#login-email", modal)?.focus(), 60);
+    resetAuthFeedback(modal);
+    setAuthMode(authUser ? "account" : "login");
+    window.setTimeout(() => (authUser ? $("[data-logout]", modal) : $("#login-email", modal))?.focus(), 60);
   }
 
   function closeLogin() {
-    $(".login-modal")?.classList.remove("is-open");
+    const modal = $(".login-modal");
+    modal?.classList.remove("is-open");
     document.body.classList.remove("no-scroll");
+    if (modal) resetAuthFeedback(modal);
+    setAuthMode("login");
   }
 
   function setMobileDrawerState(isOpen) {
@@ -833,7 +1178,7 @@
             <a href="jerseys.html">Jerseys</a>
             <a href="t-shirts.html">T-Shirts</a>
             <a href="footballs.html">Footballs</a>
-            <a href="#services">Accessories</a>
+            <a href="accessories.html">Accessories</a>
           `}
         </nav>
       `;
@@ -943,6 +1288,161 @@
     });
   }
 
+
+  function bindContactForm() {
+    const form = $('[data-contact-form]');
+    if (!form || form.dataset.contactBound === 'true') return;
+    const success = $('[data-contact-success]', form);
+    const cvInput = $('[data-cv-upload]', form);
+    const cvError = $('[data-cv-error]', form);
+    const allowedCvExtensions = ['pdf', 'jpg', 'jpeg'];
+    const allowedCvTypes = ['application/pdf', 'image/jpeg'];
+    const invalidCvMessage = 'Invalid format. Please upload your CV in PDF, JPG, or JPEG format only.';
+    form.dataset.contactBound = 'true';
+
+    const validateCvUpload = () => {
+      if (!cvInput) return true;
+      const file = cvInput.files?.[0];
+
+      if (!file) {
+        if (cvInput.dataset.cvInvalid === 'true') {
+          cvInput.setCustomValidity(invalidCvMessage);
+          if (cvError) cvError.hidden = false;
+          return false;
+        }
+        if (cvError) cvError.hidden = true;
+        cvInput.setCustomValidity('');
+        return true;
+      }
+
+      const extension = file.name.split('.').pop()?.toLowerCase() || '';
+      const typeIsValid = !file.type || allowedCvTypes.includes(file.type);
+      const extensionIsValid = allowedCvExtensions.includes(extension);
+      const isValid = extensionIsValid && typeIsValid;
+
+      if (!isValid) {
+        cvInput.value = '';
+        cvInput.dataset.cvInvalid = 'true';
+        cvInput.setCustomValidity(invalidCvMessage);
+        if (cvError) cvError.hidden = false;
+        return false;
+      }
+
+      delete cvInput.dataset.cvInvalid;
+      cvInput.setCustomValidity('');
+      if (cvError) cvError.hidden = true;
+      return true;
+    };
+
+    cvInput?.addEventListener('change', () => {
+      delete cvInput.dataset.cvInvalid;
+      validateCvUpload();
+    });
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      if (!validateCvUpload() || !form.checkValidity()) {
+        form.reportValidity();
+        return;
+      }
+      if (success) success.hidden = false;
+      form.reset();
+      if (cvInput) delete cvInput.dataset.cvInvalid;
+      validateCvUpload();
+    });
+  }
+
+  function bindCareerSelects() {
+    $$('[data-career-select]').forEach((field) => {
+      if (field.dataset.careerSelectBound === 'true') return;
+
+      const trigger = $('[data-career-select-trigger]', field);
+      const list = $('[data-career-select-list]', field);
+      const value = $('[data-career-select-value]', field);
+      const select = $('[data-career-select-input]', field);
+      const options = $$('[data-career-option]', field);
+
+      if (!trigger || !list || !value || !select || !options.length) return;
+
+      const close = () => {
+        list.hidden = true;
+        field.classList.remove('is-open');
+        trigger.setAttribute('aria-expanded', 'false');
+      };
+
+      const open = () => {
+        list.hidden = false;
+        field.classList.add('is-open');
+        trigger.setAttribute('aria-expanded', 'true');
+      };
+
+      const setValue = (option) => {
+        const nextValue = option?.dataset.careerOption || '';
+        select.value = nextValue;
+        value.textContent = nextValue || 'Select a role';
+        options.forEach((button) => {
+          button.setAttribute('aria-selected', button === option ? 'true' : 'false');
+        });
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      };
+
+      field.dataset.careerSelectBound = 'true';
+
+      trigger.addEventListener('click', () => {
+        if (list.hidden) open();
+        else close();
+      });
+
+      trigger.addEventListener('keydown', (event) => {
+        if (['Enter', ' ', 'ArrowDown'].includes(event.key)) {
+          event.preventDefault();
+          open();
+          const activeOption = options.find((button) => button.getAttribute('aria-selected') === 'true') || options[0];
+          activeOption.focus();
+        }
+      });
+
+      options.forEach((option, index) => {
+        option.addEventListener('click', () => {
+          setValue(option);
+          close();
+          trigger.focus();
+        });
+
+        option.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            close();
+            trigger.focus();
+          }
+
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            option.click();
+          }
+
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            const direction = event.key === 'ArrowDown' ? 1 : -1;
+            const nextIndex = (index + direction + options.length) % options.length;
+            options[nextIndex].focus();
+          }
+        });
+      });
+
+      document.addEventListener('click', (event) => {
+        if (!field.contains(event.target)) close();
+      });
+
+      field.closest('form')?.addEventListener('reset', () => {
+        window.setTimeout(() => {
+          setValue(null);
+          close();
+        }, 0);
+      });
+    });
+  }
+
   function boot() {
     injectInteractionStyles();
     collectProducts();
@@ -953,6 +1453,9 @@
     createMobileMenu();
     createFilters();
     bindProductSortControls();
+    bindCareerSelects();
+    bindContactForm();
+    initSupabaseAuth();
     initWishlist();
     initCarousel();
     bindHeaderActions();

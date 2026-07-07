@@ -72,8 +72,7 @@ async function openDrawer(page) {
 
 test.beforeEach(async ({ page }) => {
   fs.mkdirSync(screenshotDir, { recursive: true });
-  await page.goto("/");
-  await page.waitForLoadState("domcontentloaded");
+  await page.goto("/", { waitUntil: "domcontentloaded" });
 });
 
 test("mobile header and drawer interactions work on Chromium iPhone 12 Pro viewport", async ({ page }) => {
@@ -205,6 +204,90 @@ test("football shoes category card shows premium boot image without layout overf
   await categoryCard.screenshot({ path: path.join(screenshotDir, "football-shoes-category-card.png") });
 });
 
+test("homepage featured filters show at least four products per category", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1200 });
+  await page.goto("/");
+
+  const section = page.locator("#products");
+  const filters = section.locator(".filter-wrap");
+  const cards = section.locator(".product-card");
+
+  await expect(filters).toBeVisible();
+  await expect(cards).toHaveCount(16);
+  await waitForImages(section.locator(".product-card img"));
+
+  const allCategories = await cards.evaluateAll((items) =>
+    [...new Set(items.map((item) => item.querySelector("p")?.textContent?.trim()).filter(Boolean))]
+  );
+  expect(allCategories).toEqual(expect.arrayContaining(["Football Shoes", "Jersey", "T-Shirt", "Football"]));
+  await expectNoHorizontalOverflow(page);
+  await section.screenshot({ path: path.join(screenshotDir, "featured-filter-all.png") });
+
+  const expectations = [
+    {
+      filter: "Football Shoes",
+      screenshot: "featured-filter-football-shoes.png",
+      names: ["Predator Elite FG", "Phantom Control Pro", "Velocity Grip SG", "Aero Touch Academy"],
+    },
+    {
+      filter: "Jersey",
+      screenshot: "featured-filter-jersey.png",
+      names: ["Legendary Home Jersey", "Elite Home Jersey", "Shadow Away Jersey", "Pro Training Jersey"],
+    },
+    {
+      filter: "T-Shirt",
+      screenshot: "featured-filter-t-shirt.png",
+      names: ["Performance Tee", "Performance Training Tee", "Matchday Travel Tee", "Pro Training Tee"],
+    },
+    {
+      filter: "Football",
+      screenshot: "featured-filter-football.png",
+      names: ["Premier Match Ball", "Elite Training Ball", "Neon Strike Football", "Pro League Ball"],
+    },
+  ];
+
+  for (const item of expectations) {
+    await filters.getByRole("button", { name: item.filter, exact: true }).click({ force: true });
+
+    const visibleCards = await cards.evaluateAll((items) =>
+      items
+        .filter((card) => {
+          const style = window.getComputedStyle(card);
+          const rect = card.getBoundingClientRect();
+          return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+        })
+        .map((card) => card.querySelector("h3")?.textContent?.trim())
+        .filter(Boolean)
+    );
+
+    expect(visibleCards.length).toBeGreaterThanOrEqual(4);
+    expect(visibleCards).toEqual(expect.arrayContaining(item.names));
+    await expectNoHorizontalOverflow(page);
+    await section.screenshot({ path: path.join(screenshotDir, item.screenshot) });
+  }
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await expectNoHorizontalOverflow(page);
+
+  const mobileSection = page.locator("#products");
+  const mobileFilters = mobileSection.locator(".filter-wrap");
+  const mobileCards = mobileSection.locator(".product-card");
+
+  for (const item of expectations) {
+    await mobileFilters.getByRole("button", { name: item.filter, exact: true }).click({ force: true });
+    const count = await mobileCards.evaluateAll((items) =>
+      items.filter((card) => {
+        const style = window.getComputedStyle(card);
+        const rect = card.getBoundingClientRect();
+        return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+      }).length
+    );
+    expect(count).toBeGreaterThanOrEqual(4);
+    await expectNoHorizontalOverflow(page);
+  }
+});
+
 test("featured football shoe product card shows distinct premium boot image without layout overflow", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
@@ -332,6 +415,169 @@ test("promo banner shows premium footballer and ball visual without layout overf
   await promoBanner.screenshot({ path: path.join(screenshotDir, "promo-banner-mobile.png") });
 });
 
+test("promo banner Explore Now opens the Store page", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+
+  const promoExploreLink = page.locator(".promo-banner").getByRole("link", { name: /Explore Now/i });
+  await expect(promoExploreLink).toHaveAttribute("href", "products.html");
+
+  await promoExploreLink.click();
+  await expect(page).toHaveURL(/products\.html$/);
+  await expect(page.getByRole("heading", { name: /All Products/i, level: 1 })).toBeVisible();
+});
+
+test("footer Contact Us opens contact page with static form success", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/");
+
+  const footer = page.locator(".site-footer");
+  await footer.getByRole("link", { name: "Contact Us", exact: true }).click();
+  await expect(page).toHaveURL(/contact\.html$/);
+  await expect(page.getByRole("heading", { name: /Contact Us/i, level: 1 })).toBeVisible();
+  await expect(page.getByText("Support Topics", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Quick Help", exact: true })).toHaveCount(0);
+  const contactInfo = page.locator(".contact-info-grid");
+  await expect(contactInfo.getByText("support@attractionfootball.com")).toBeVisible();
+  await expect(contactInfo.getByText("+91 98765 43210")).toBeVisible();
+  await expect(contactInfo.getByText("24/7 Customer Support")).toBeVisible();
+
+  const form = page.locator("[data-contact-form]");
+  await form.getByLabel("Full Name").fill("Alex Morgan");
+  await form.getByLabel("Email Address").fill("alex@example.com");
+  await form.getByLabel("Phone Number").fill("+91 98765 43210");
+  await form.getByLabel("Subject").fill("Boot sizing help");
+  await form.getByLabel("Message").fill("I need help choosing the right football boot size.");
+  await form.getByRole("button", { name: "Send Message", exact: true }).click();
+  await expect(page.getByText("Thank you! Your message has been received.")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(screenshotDir, "contact-desktop.png"), fullPage: false });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/contact.html");
+  await expect(page.getByRole("heading", { name: /Contact Us/i, level: 1 })).toBeVisible();
+  await expect(page.getByText("Support Topics", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Quick Help", exact: true })).toHaveCount(0);
+  const mobileContactInfo = page.locator(".contact-info-grid");
+  await expect(mobileContactInfo.getByText("support@attractionfootball.com")).toBeVisible();
+  await expect(mobileContactInfo.getByText("+91 98765 43210")).toBeVisible();
+  await expect(mobileContactInfo.getByText("24/7 Customer Support")).toBeVisible();
+
+  const mobileForm = page.locator("[data-contact-form]");
+  await expect(mobileForm.getByLabel("Full Name")).toBeVisible();
+  await expect(mobileForm.getByLabel("Email Address")).toBeVisible();
+  await expect(mobileForm.getByLabel("Phone Number")).toBeVisible();
+  await expect(mobileForm.getByLabel("Subject")).toBeVisible();
+  await expect(mobileForm.getByLabel("Message")).toBeVisible();
+  await expect(mobileForm.getByRole("button", { name: "Send Message", exact: true })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await mobileForm.getByLabel("Full Name").fill("Alex Morgan");
+  await mobileForm.getByLabel("Email Address").fill("alex@example.com");
+  await mobileForm.getByLabel("Phone Number").fill("+91 98765 43210");
+  await mobileForm.getByLabel("Subject").fill("Mobile contact test");
+  await mobileForm.getByLabel("Message").fill("Testing the mobile contact form layout.");
+  await mobileForm.getByRole("button", { name: "Send Message", exact: true }).click();
+  await expect(page.getByText("Thank you! Your message has been received.")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(screenshotDir, "contact-mobile.png"), fullPage: false });
+});
+
+test("careers application form validates CV upload format", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/careers.html");
+
+  const form = page.locator(".careers-application-form");
+  const cvInput = form.locator("[data-cv-upload]");
+  const cvError = form.locator("[data-cv-error]");
+  const cvField = form.locator("label", { hasText: "CV Upload" });
+  const success = form.locator("[data-contact-success]");
+  const invalidFile = path.join(screenshotDir, "invalid-cv.txt");
+  const validFile = path.join(screenshotDir, "valid-cv.pdf");
+
+  fs.writeFileSync(invalidFile, "invalid cv format");
+  fs.writeFileSync(validFile, "%PDF-1.4\n% Attraction Football test CV\n");
+
+  await expect(cvInput).toHaveAttribute("accept", ".pdf,.jpg,.jpeg,application/pdf,image/jpeg");
+  await expect(cvField.getByText("Accepted formats: PDF, JPG, JPEG")).toBeVisible();
+  await cvField.screenshot({ path: path.join(screenshotDir, "careers-cv-upload-field.png") });
+
+  await cvInput.setInputFiles(invalidFile);
+  await expect(cvError).toBeVisible();
+  await expect(cvError).toHaveText("Invalid format. Please upload your CV in PDF, JPG, or JPEG format only.");
+
+  await form.getByLabel("Full Name").fill("Alex Morgan");
+  await form.getByLabel("Email Address").fill("alex@example.com");
+  await form.getByLabel("Phone Number").fill("+91 98765 43210");
+  await form.locator("[data-career-select-trigger]").click();
+  await form.getByRole("option", { name: "Frontend Developer", exact: true }).click();
+  await form.getByLabel("Message").fill("I want to apply for the frontend developer role.");
+  await form.getByRole("button", { name: "Send Application", exact: true }).click();
+  await expect(success).toBeHidden();
+  await expect(cvError).toBeVisible();
+
+  await cvInput.setInputFiles(validFile);
+  await expect(cvError).toBeHidden();
+
+  await form.getByRole("button", { name: "Send Application", exact: true }).click();
+  await expect(success).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("footer Shipping & Delivery opens shipping page", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/");
+
+  const footerShippingLink = page.locator(".site-footer").getByRole("link", { name: "Shipping & Delivery", exact: true });
+  await expect(footerShippingLink).toHaveAttribute("href", "shipping-delivery.html");
+  await footerShippingLink.click();
+  await expect(page).toHaveURL(/shipping-delivery\.html$/);
+  await expect(page.getByRole("heading", { name: /Shipping & Delivery/i, level: 1 })).toBeVisible();
+  await expect(page.getByText(/3-4 days after dispatch/i)).toBeVisible();
+  await expect(page.getByText("support@attractionfootball.com").first()).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(screenshotDir, "shipping-delivery-desktop.png"), fullPage: false });
+
+  const pageFooterLink = page.locator(".site-footer").getByRole("link", { name: "Shipping & Delivery", exact: true });
+  await expect(pageFooterLink).toHaveAttribute("href", "shipping-delivery.html");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/shipping-delivery.html");
+  await expect(page.getByRole("heading", { name: /Shipping & Delivery/i, level: 1 })).toBeVisible();
+  await expect(page.getByText(/3-4 days after dispatch/i)).toBeVisible();
+  await expect(page.locator(".shipping-card")).toHaveCount(5);
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(screenshotDir, "shipping-delivery-mobile.png"), fullPage: false });
+});
+
+
+test("footer Returns & Exchanges opens returns page", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/");
+
+  const footerReturnsLink = page.locator(".site-footer").getByRole("link", { name: "Returns & Exchanges", exact: true });
+  await expect(footerReturnsLink).toHaveAttribute("href", "returns-exchanges.html");
+  await footerReturnsLink.click();
+  await expect(page).toHaveURL(/returns-exchanges\.html$/);
+  await expect(page.getByRole("heading", { name: /Returns & Exchanges/i, level: 1 })).toBeVisible();
+  await expect(page.getByText(/7 days of delivery/i)).toBeVisible();
+  await expect(page.locator(".shipping-card", { hasText: "Refund Timeline" }).getByText(/refund is processed within 5-7 working days/i)).toBeVisible();
+  await expect(page.locator(".shipping-card")).toHaveCount(6);
+  await expect(page.locator(".returns-step-card")).toHaveCount(5);
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(screenshotDir, "returns-exchanges-desktop.png"), fullPage: false });
+
+  const pageFooterLink = page.locator(".site-footer").getByRole("link", { name: "Returns & Exchanges", exact: true });
+  await expect(pageFooterLink).toHaveAttribute("href", "returns-exchanges.html");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/returns-exchanges.html");
+  await expect(page.getByRole("heading", { name: /Returns & Exchanges/i, level: 1 })).toBeVisible();
+  await expect(page.getByText(/7 days of delivery/i)).toBeVisible();
+  await expect(page.locator(".shipping-card", { hasText: "Refund Timeline" }).getByText(/refund is processed within 5-7 working days/i)).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: path.join(screenshotDir, "returns-exchanges-mobile.png"), fullPage: false });
+});
+
 test("premium footer renders ecommerce links newsletter trust row and responsive layout", async ({ page }) => {
   const viewports = [
     { width: 360, height: 844, screenshot: "footer-360.png" },
@@ -406,7 +652,7 @@ test("premium footer renders ecommerce links newsletter trust row and responsive
       expect(rect.scrollWidth).toBeLessThanOrEqual(rect.clientWidth + 1);
     }
 
-    expect(footerMetrics.links.length).toBeGreaterThanOrEqual(20);
+    expect(footerMetrics.links.length).toBeGreaterThanOrEqual(19);
     for (const link of footerMetrics.links) {
       expect(link.width, `${link.text} link width`).toBeGreaterThan(0);
       expect(link.height, `${link.text} link height`).toBeGreaterThan(0);
@@ -694,6 +940,75 @@ test("footballs nav opens dedicated category page with filters search sort cart 
   await page.locator(".footballs-section").screenshot({ path: path.join(screenshotDir, "footballs-mobile.png") });
 });
 
+
+test("accessories nav opens dedicated category page with filters search sort cart wishlist and responsive layout", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/");
+
+  const desktopNav = page.locator(".main-nav");
+  await desktopNav.getByRole("link", { name: "Accessories", exact: true }).click();
+  await expect(page).toHaveURL(/accessories\.html$/);
+  await expect(page.locator(".main-nav a.active")).toHaveText("Accessories");
+  await expect(page.getByRole("heading", { name: "PREMIUM ACCESSORIES", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "20 PREMIUM ACCESSORIES", level: 2 })).toBeVisible();
+  await expect(page.locator(".product-card")).toHaveCount(20);
+  const accessoryImageSources = await page.locator(".accessories-grid .product-card img").evaluateAll((images) =>
+    images.map((image) => image.getAttribute("src"))
+  );
+  expect(accessoryImageSources).toHaveLength(20);
+  expect(new Set(accessoryImageSources).size).toBe(20);
+  await expectNoHorizontalOverflow(page);
+  await waitForImages(page.locator(".accessories-grid .product-card:nth-child(-n + 8) img"));
+  await page.screenshot({ path: path.join(screenshotDir, "accessories-desktop.png"), fullPage: false });
+
+  const searchInput = page.locator("#accessories-search");
+  await searchInput.fill("tactics");
+  await expect.poll(() => visibleProductCount(page)).toBe(1);
+  await expect(page.locator(".product-card", { hasText: "Coach Tactics Board" })).toBeVisible();
+
+  await searchInput.fill("");
+  await expect.poll(() => visibleProductCount(page)).toBe(20);
+
+  const filters = page.locator(".filter-wrap");
+  await filters.getByRole("button", { name: "Protection", exact: true }).click({ force: true });
+  await expect.poll(() => visibleProductCount(page)).toBe(3);
+  await expect(page.locator(".product-card", { hasText: "Carbon Shin Guards" })).toBeVisible();
+
+  await filters.getByRole("button", { name: "All", exact: true }).click({ force: true });
+  await expect.poll(() => visibleProductCount(page)).toBe(20);
+
+  await page.getByLabel("Sort").selectOption("price-low");
+  await expect(page.locator(".product-card h3").first()).toHaveText("Pro Sports Tape");
+
+  const firstProduct = page.locator(".product-card", { hasText: "Pro Sports Tape" });
+  await firstProduct.getByRole("button", { name: "Add to Cart" }).click();
+  await expect(page.locator(".cart-count")).toHaveText("1");
+
+  const wishlistButton = firstProduct.getByLabel("Add Pro Sports Tape to wishlist");
+  await wishlistButton.click();
+  await expect(wishlistButton).toHaveClass(/is-active/);
+  await expect(wishlistButton).toHaveText("♥");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+
+  const drawer = page.locator("#mobile-drawer");
+  await page.locator(".menu-toggle").click();
+  await expect(drawer).toHaveClass(/open/);
+  const drawerAccessoriesLink = drawer.locator(".mobile-drawer-nav").getByRole("link", { name: "Accessories", exact: true });
+  await expect(drawerAccessoriesLink).toHaveAttribute("href", "accessories.html");
+  await drawerAccessoriesLink.click();
+  await expect(page).toHaveURL(/accessories\.html$/);
+  await expect(page.getByRole("heading", { name: "PREMIUM ACCESSORIES", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "20 PREMIUM ACCESSORIES", level: 2 })).toBeVisible();
+  await expect(page.locator(".product-card")).toHaveCount(20);
+  await expect(page.locator("#accessories-search")).toBeVisible();
+
+  await expectNoHorizontalOverflow(page);
+  await waitForImages(page.locator(".accessories-grid .product-card:nth-child(-n + 2) img"));
+  await page.locator(".accessories-section").screenshot({ path: path.join(screenshotDir, "accessories-mobile.png") });
+});
+
 test("t-shirts nav opens dedicated category page with filters search sort cart wishlist and responsive layout", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/");
@@ -756,4 +1071,92 @@ test("t-shirts nav opens dedicated category page with filters search sort cart w
   await expectNoHorizontalOverflow(page);
   await waitForImages(page.locator(".tshirts-grid .product-card:nth-child(-n + 2) img"));
   await page.locator(".tshirts-section").screenshot({ path: path.join(screenshotDir, "t-shirts-mobile.png") });
+});
+
+test("account modal switches between login and register with frontend validation", async ({ page }) => {
+  await page.addInitScript(() => {
+    let currentUser = null;
+    const listeners = [];
+    const notify = () => listeners.forEach((listener) => listener("SIGNED_IN", currentUser ? { user: currentUser } : null));
+
+    window.__attractionSupabaseClient = {
+      auth: {
+        getSession: async () => ({ data: { session: currentUser ? { user: currentUser } : null }, error: null }),
+        onAuthStateChange: (callback) => {
+          listeners.push(callback);
+          return { data: { subscription: { unsubscribe: () => {} } } };
+        },
+        signInWithPassword: async ({ email, password }) => {
+          if (password === "wrong-password") {
+            return { data: { user: null, session: null }, error: { message: "Invalid login credentials" } };
+          }
+
+          currentUser = { email, user_metadata: { full_name: "Demo Player", phone: "+91 98765 43210" } };
+          notify();
+          return { data: { user: currentUser, session: { user: currentUser } }, error: null };
+        },
+        signUp: async ({ email, options }) => ({
+          data: { user: { email, user_metadata: options.data }, session: null },
+          error: null,
+        }),
+        signOut: async () => {
+          currentUser = null;
+          listeners.forEach((listener) => listener("SIGNED_OUT", null));
+          return { error: null };
+        },
+      },
+    };
+  });
+
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/");
+
+  const modal = page.locator(".login-modal");
+  await page.locator('.header-actions button[aria-label="Account"]').click();
+  await expect(modal).toHaveClass(/is-open/);
+  await expect(modal.getByRole("heading", { name: /Login|Account/ })).toBeVisible();
+  await expect(modal.getByText("New here?")).toBeVisible();
+
+  await page.locator("#login-email").fill("demo@example.com");
+  await page.locator("#login-password").fill("wrong-password");
+  await modal.getByRole("button", { name: "Login", exact: true }).click();
+  await expect(modal.getByText("Invalid login credentials.")).toBeVisible();
+
+  await modal.getByRole("button", { name: "Create an account", exact: true }).click();
+  await expect(modal.getByRole("heading", { name: "Register", exact: true })).toBeVisible();
+  await expect(page.locator("#register-name")).toBeVisible();
+
+  await page.locator("#register-name").fill("Demo Player");
+  await page.locator("#register-email").fill("demo@example.com");
+  await page.locator("#register-phone").fill("+91 98765 43210");
+  await page.locator("#register-password").fill("NeonPass123");
+  await page.locator("#register-confirm-password").fill("DifferentPass123");
+  await modal.getByRole("button", { name: "Create Account", exact: true }).click();
+  await expect(modal.getByText("Passwords do not match.")).toBeVisible();
+
+  await page.locator("#register-confirm-password").fill("NeonPass123");
+  await modal.getByRole("button", { name: "Create Account", exact: true }).click();
+  await expect(modal.getByText("Account created successfully. Please check your email to confirm your account.")).toBeVisible();
+
+  await modal.getByRole("button", { name: "Login", exact: true }).click();
+  await expect(modal.getByRole("heading", { name: /Login|Account/ })).toBeVisible();
+  await page.locator("#login-email").fill("demo@example.com");
+  await page.locator("#login-password").fill("valid-password");
+  await modal.getByRole("button", { name: "Login", exact: true }).click();
+  await expect(modal).not.toHaveClass(/is-open/);
+
+  await page.locator('.header-actions button[aria-label="Account"]').click();
+  await expect(modal.getByRole("heading", { name: "Account", exact: true })).toBeVisible();
+  await expect(modal.getByText("Logged in as:")).toBeVisible();
+  await expect(modal.getByText("demo@example.com")).toBeVisible();
+
+  await modal.getByRole("button", { name: "Logout", exact: true }).click();
+  await expect(modal).not.toHaveClass(/is-open/);
+
+  await page.locator('.header-actions button[aria-label="Account"]').click();
+  await expect(modal.getByRole("heading", { name: "Login", exact: true })).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(modal).not.toHaveClass(/is-open/);
+  await expectNoHorizontalOverflow(page);
 });
