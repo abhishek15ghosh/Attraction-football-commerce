@@ -73,6 +73,60 @@ async function openDrawer(page) {
 test.beforeEach(async ({ page }) => {
   fs.mkdirSync(screenshotDir, { recursive: true });
   await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.evaluate(() => {
+    localStorage.setItem("attractionCookieConsent", "accepted");
+    document.querySelector("[data-cookie-banner]")?.classList.remove("is-visible");
+  });
+});
+
+test("cookie banner appears on first visit and saves consent preferences", async ({ page }) => {
+  await page.evaluate(() => {
+    localStorage.removeItem("attractionCookieConsent");
+    localStorage.removeItem("attractionCookiePreferences");
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+
+  const banner = page.locator("[data-cookie-banner]");
+  await expect(banner).toBeVisible();
+  await expect(banner).toContainText("We use cookies and browser storage to improve your shopping experience");
+  await expect(banner.getByRole("link", { name: "Cookies Policy" })).toHaveAttribute("href", "cookies.html");
+
+  await banner.getByRole("button", { name: "Accept" }).click();
+  await expect(banner).not.toHaveClass(/is-visible/);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("attractionCookieConsent"))).toBe("accepted");
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator("[data-cookie-banner]")).not.toHaveClass(/is-visible/);
+
+  await page.evaluate(() => {
+    localStorage.removeItem("attractionCookieConsent");
+    localStorage.removeItem("attractionCookiePreferences");
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+
+  await expect(banner).toBeVisible();
+  await banner.getByRole("button", { name: "Manage" }).click();
+
+  const modal = page.locator("[data-cookie-preferences]");
+  await expect(modal).toHaveClass(/is-open/);
+  await expect(modal.getByText("Essential cookies / storage")).toBeVisible();
+  await expect(modal.getByText("Cart & wishlist storage")).toBeVisible();
+  await expect(modal.getByText("Supabase Auth", { exact: true })).toBeVisible();
+
+  await modal.getByRole("button", { name: "Save Preferences" }).click();
+  await expect(modal).not.toHaveClass(/is-open/);
+  await expect(banner).not.toHaveClass(/is-visible/);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("attractionCookieConsent"))).toBe("custom");
+  await expectNoHorizontalOverflow(page);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => {
+    localStorage.removeItem("attractionCookieConsent");
+    localStorage.removeItem("attractionCookiePreferences");
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(banner).toBeVisible();
+  await expectNoHorizontalOverflow(page);
 });
 
 test("mobile header and drawer interactions work on Chromium iPhone 12 Pro viewport", async ({ page }) => {
@@ -80,6 +134,7 @@ test("mobile header and drawer interactions work on Chromium iPhone 12 Pro viewp
   const logo = page.locator(".brand");
   const searchButton = page.locator('.header-actions button[aria-label="Search"]');
   const accountButton = page.locator('.header-actions button[aria-label="Account"]');
+  const wishlistButton = page.locator('.header-actions button[aria-label="Wishlist"]');
   const cartButton = page.locator(".cart-button");
   const menuButton = page.locator(".menu-toggle");
   const drawer = page.locator("#mobile-drawer");
@@ -91,9 +146,11 @@ test("mobile header and drawer interactions work on Chromium iPhone 12 Pro viewp
   await expect(logo).toBeVisible();
   await expect(searchButton).toBeVisible();
   await expect(accountButton).toBeVisible();
+  await expect(wishlistButton).toBeVisible();
   await expect(cartButton).toBeVisible();
   await expect(menuButton).toBeVisible();
 
+  await expectInViewport(wishlistButton, viewport.width, viewport.height);
   await expectInViewport(cartButton, viewport.width, viewport.height);
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: path.join(screenshotDir, "mobile-header-before.png"), fullPage: true });
@@ -130,7 +187,7 @@ test("mobile header and drawer interactions work on Chromium iPhone 12 Pro viewp
   await expectNoHorizontalOverflow(page);
 });
 
-test("sub-380 mobile header keeps only logo cart and menu, with search and account in drawer", async ({ page }) => {
+test("sub-380 mobile header keeps logo wishlist cart and menu, with search and account in drawer", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 844 });
   await page.goto("/");
   await page.waitForLoadState("domcontentloaded");
@@ -138,6 +195,7 @@ test("sub-380 mobile header keeps only logo cart and menu, with search and accou
   const logo = page.locator(".brand");
   const searchButton = page.locator('.header-actions button[aria-label="Search"]');
   const accountButton = page.locator('.header-actions button[aria-label="Account"]');
+  const wishlistButton = page.locator('.header-actions button[aria-label="Wishlist"]');
   const cartButton = page.locator(".cart-button");
   const menuButton = page.locator(".menu-toggle");
   const drawer = page.locator("#mobile-drawer");
@@ -146,6 +204,7 @@ test("sub-380 mobile header keeps only logo cart and menu, with search and accou
   const drawerAccount = drawer.locator("[data-drawer-account]");
 
   await expect(logo).toBeVisible();
+  await expect(wishlistButton).toBeVisible();
   await expect(cartButton).toBeVisible();
   await expect(menuButton).toBeVisible();
   await expect(searchButton).toBeHidden();
@@ -202,6 +261,56 @@ test("football shoes category card shows premium boot image without layout overf
   await expect(categoryBoot).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await categoryCard.screenshot({ path: path.join(screenshotDir, "football-shoes-category-card.png") });
+});
+
+test("wishlist header drawer and wishlist page work like cart", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto("/");
+
+  const firstProduct = page.locator(".product-card", { hasText: "Predator Elite FG" }).first();
+  const productHeart = firstProduct.getByLabel("Add Predator Elite FG to wishlist");
+  const headerWishlist = page.locator('.header-actions button[aria-label="Wishlist"]');
+  const wishlistDrawer = page.locator(".wishlist-drawer");
+
+  await expect(headerWishlist).toBeVisible();
+  await expect(headerWishlist.locator(".wishlist-count")).toHaveText("0");
+
+  await productHeart.click();
+  await expect(productHeart).toHaveClass(/is-active/);
+  await expect(productHeart).toHaveText("♥");
+  await expect(headerWishlist.locator(".wishlist-count")).toHaveText("1");
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator('.header-actions button[aria-label="Wishlist"] .wishlist-count')).toHaveText("1");
+  await expect(page.locator(".product-card", { hasText: "Predator Elite FG" }).first().getByLabel("Add Predator Elite FG to wishlist")).toHaveText("♥");
+
+  await page.locator('.header-actions button[aria-label="Wishlist"]').click();
+  await expect(wishlistDrawer).toHaveClass(/is-open/);
+  await expect(wishlistDrawer.getByText("Predator Elite FG")).toBeVisible();
+  await expect(wishlistDrawer.getByText("Football Shoes · $219.99")).toBeVisible();
+  await expect(wishlistDrawer.locator(".wishlist-item img")).toBeVisible();
+
+  await wishlistDrawer.getByRole("button", { name: "Add to Cart", exact: true }).click();
+  await expect(page.locator(".cart-count")).toHaveText("1");
+
+  await wishlistDrawer.getByRole("link", { name: "View All Wishlist" }).click();
+  await expect(page).toHaveURL(/wishlist.html/);
+  await expect(page.locator("#wishlist-title")).toHaveText("Wishlist");
+  await expect(page.locator(".wishlist-grid .product-card")).toHaveCount(1);
+  await expect(page.locator(".wishlist-grid", { hasText: "Predator Elite FG" })).toBeVisible();
+
+  await page.locator(".wishlist-page-remove").click();
+  await expect(page.locator(".wishlist-grid .product-card")).toHaveCount(0);
+  await expect(page.locator("[data-wishlist-empty]").getByText("Your wishlist is empty.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Shop Products" })).toHaveAttribute("href", "products.html");
+  await expect(page.locator('.header-actions button[aria-label="Wishlist"] .wishlist-count')).toHaveText("0");
+  await expectNoHorizontalOverflow(page);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/wishlist.html");
+  await expect(page.locator("#wishlist-title")).toBeVisible();
+  await expect(page.locator("[data-wishlist-empty]").getByText("Your wishlist is empty.")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
 });
 
 test("homepage featured filters show at least four products per category", async ({ page }) => {

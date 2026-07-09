@@ -12,6 +12,8 @@
   const STORAGE_KEYS = {
     cart: "attraction_cart_v1",
     wishlist: "attraction_wishlist_v1",
+    cookieConsent: "attractionCookieConsent",
+    cookiePreferences: "attractionCookiePreferences",
   };
 
   const SUPABASE_URL = "https://jvpejotupbiagwqqzzha.supabase.co";
@@ -40,7 +42,8 @@
   };
 
   let cart = readStorage(STORAGE_KEYS.cart, []);
-  let wishlist = readStorage(STORAGE_KEYS.wishlist, []);
+  let wishlist = [];
+  let productLookup = new Map();
   let activeCategory = "All";
   let searchTerm = "";
   let currentSlide = 0;
@@ -49,6 +52,8 @@
   const productCards = $$(".product-card");
   const cartButton = $(".cart-button");
   const cartCount = $(".cart-count");
+  let wishlistButton = $(".wishlist-button");
+  let wishlistCount = $(".wishlist-count");
   const searchButton = $('.header-actions button[aria-label="Search"]');
   const accountButton = $('.header-actions button[aria-label="Account"]');
   const header = $(".site-header");
@@ -65,6 +70,86 @@
       .trim()
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/(^-|-$)/g, "");
+
+  const escapeHTML = (value = "") =>
+    String(value).replace(/[&<>"']/g, (character) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    })[character]);
+
+  const normalizePrice = (value) => Number(String(value || "0").replace(/[^0-9.]/g, "")) || 0;
+
+  function getProductFromCard(card, index = 0) {
+    const name = $("h3", card)?.textContent.trim() || `Product ${index + 1}`;
+    const category = $("p", card)?.textContent.trim() || "Product";
+    const price = normalizePrice($("strong", card)?.textContent || "0");
+    const id = card.dataset.id || slugify(name);
+    const image = $("img", card)?.getAttribute("src") || "";
+
+    return { id, name, category, price, image };
+  }
+
+  function getWishlistStorageKey(user = authUser) {
+    const userKey = user?.id || user?.email;
+    return userKey ? `${STORAGE_KEYS.wishlist}:${userKey}` : STORAGE_KEYS.wishlist;
+  }
+
+  function normalizeWishlistItems(items) {
+    if (!Array.isArray(items)) return [];
+    const normalized = [];
+
+    items.forEach((item) => {
+      const rawItem = typeof item === "string" ? { id: item } : item;
+      if (!rawItem || typeof rawItem !== "object") return;
+
+      const id = rawItem.id || slugify(rawItem.name || "");
+      if (!id) return;
+
+      const product = productLookup.get(id) || {};
+      const nextItem = {
+        id,
+        name: rawItem.name || product.name || id.replace(/-/g, " "),
+        category: rawItem.category || product.category || "Product",
+        price: normalizePrice(rawItem.price ?? product.price ?? 0),
+        image: rawItem.image || product.image || "",
+      };
+
+      if (!normalized.some((saved) => saved.id === id)) normalized.push(nextItem);
+    });
+
+    return normalized;
+  }
+
+  function mergeWishlistItems(primary, secondary) {
+    return normalizeWishlistItems([...primary, ...secondary]);
+  }
+
+  function loadWishlistForCurrentUser({ mergeGuest = false } = {}) {
+    const storageKey = getWishlistStorageKey();
+    let nextWishlist = normalizeWishlistItems(readStorage(storageKey, []));
+
+    if (authUser && mergeGuest) {
+      const guestWishlist = normalizeWishlistItems(readStorage(STORAGE_KEYS.wishlist, []));
+      nextWishlist = mergeWishlistItems(nextWishlist, guestWishlist);
+      writeStorage(storageKey, nextWishlist);
+    }
+
+    wishlist = nextWishlist;
+    updateWishlistUI();
+  }
+
+  function saveWishlist() {
+    wishlist = normalizeWishlistItems(wishlist);
+    writeStorage(getWishlistStorageKey(), wishlist);
+    updateWishlistUI();
+  }
+
+  function isWishlisted(id) {
+    return wishlist.some((item) => item.id === id);
+  }
 
   function injectInteractionStyles() {
     const style = document.createElement("style");
@@ -93,6 +178,7 @@
       }
       .mobile-panel,
       .cart-drawer,
+      .wishlist-drawer,
       .login-modal,
       .search-modal {
         position: fixed;
@@ -102,6 +188,7 @@
       }
       .mobile-panel::before,
       .cart-drawer::before,
+      .wishlist-drawer::before,
       .login-modal::before,
       .search-modal::before {
         content: "";
@@ -113,18 +200,21 @@
       }
       .mobile-panel.is-open,
       .cart-drawer.is-open,
+      .wishlist-drawer.is-open,
       .login-modal.is-open,
       .search-modal.is-open {
         pointer-events: auto;
       }
       .mobile-panel.is-open::before,
       .cart-drawer.is-open::before,
+      .wishlist-drawer.is-open::before,
       .login-modal.is-open::before,
       .search-modal.is-open::before {
         opacity: 1;
       }
       .mobile-panel__content,
-      .cart-drawer__content {
+      .cart-drawer__content,
+      .wishlist-drawer__content {
         position: absolute;
         top: 0;
         right: 0;
@@ -139,7 +229,8 @@
         overflow-y: auto;
       }
       .mobile-panel.is-open .mobile-panel__content,
-      .cart-drawer.is-open .cart-drawer__content {
+      .cart-drawer.is-open .cart-drawer__content,
+      .wishlist-drawer.is-open .wishlist-drawer__content {
         transform: translateX(0);
       }
       .drawer-head,
@@ -229,19 +320,22 @@
         color: var(--lime);
         transform: scale(1.08);
       }
-      .cart-item {
+      .cart-item,
+      .wishlist-item {
         display: grid;
         grid-template-columns: 1fr auto;
         gap: 14px;
         padding: 17px 0;
         border-bottom: 1px solid rgba(255,255,255,.1);
       }
-      .cart-item h4 {
+      .cart-item h4,
+      .wishlist-item h4 {
         margin: 0 0 7px;
         font-size: 14px;
         text-transform: uppercase;
       }
-      .cart-item p {
+      .cart-item p,
+      .wishlist-item p {
         margin: 0;
         color: var(--muted);
         font-size: 13px;
@@ -260,6 +354,68 @@
         background: rgba(255,255,255,.06);
         color: var(--text);
         cursor: pointer;
+      }
+      .wishlist-item {
+        grid-template-columns: 76px 1fr;
+        align-items: center;
+      }
+      .wishlist-item img {
+        width: 76px;
+        height: 76px;
+        object-fit: contain;
+        border: 1px solid rgba(255,255,255,.1);
+        border-radius: 12px;
+        background: radial-gradient(circle, rgba(207,255,32,.12), rgba(255,255,255,.03));
+      }
+      .wishlist-item-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 9px;
+        margin-top: 12px;
+      }
+      .wishlist-item-actions button,
+      .wishlist-view-all,
+      .wishlist-shop-link,
+      .wishlist-page-remove {
+        border: 1px solid rgba(255,255,255,.14);
+        border-radius: 999px;
+        background: rgba(255,255,255,.05);
+        color: var(--text);
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 900;
+        letter-spacing: .04em;
+        padding: 10px 14px;
+        text-transform: uppercase;
+      }
+      .wishlist-item-actions [data-wishlist-add-cart],
+      .wishlist-shop-link {
+        color: #080900;
+        border-color: var(--lime);
+        background: var(--lime);
+      }
+      .wishlist-view-all {
+        display: grid;
+        place-items: center;
+        text-decoration: none;
+      }
+      .wishlist-button {
+        color: var(--lime) !important;
+      }
+      .wishlist-count {
+        position: absolute;
+        top: -10px;
+        right: -10px;
+        width: 18px;
+        height: 18px;
+        border-radius: 999px;
+        border: 2px solid var(--bg);
+        background: var(--lime);
+        color: #101010;
+        display: grid;
+        place-items: center;
+        font-size: 10px;
+        font-weight: 900;
       }
       .cart-total {
         display: flex;
@@ -447,13 +603,177 @@
         padding: 12px 16px;
         border-radius: 8px;
       }
+      .cookie-banner {
+        position: fixed;
+        left: 50%;
+        bottom: 22px;
+        z-index: 980;
+        width: min(1120px, calc(100vw - 32px));
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        gap: 18px;
+        padding: 18px;
+        border: 1px solid rgba(207,255,32,.32);
+        border-radius: 18px;
+        background:
+          radial-gradient(circle at 12% 0%, rgba(207,255,32,.14), transparent 34%),
+          linear-gradient(135deg, rgba(16,18,22,.98), rgba(5,7,6,.98));
+        box-shadow: 0 22px 70px rgba(0,0,0,.62);
+        transform: translate(-50%, calc(100% + 32px));
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity .25s ease, transform .25s ease;
+      }
+      .cookie-banner.is-visible {
+        transform: translate(-50%, 0);
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .cookie-banner__copy {
+        display: grid;
+        gap: 6px;
+      }
+      .cookie-banner__copy strong {
+        font-family: var(--font-heading);
+        font-size: 24px;
+        line-height: 1;
+        text-transform: uppercase;
+      }
+      .cookie-banner__copy p {
+        margin: 0;
+        max-width: 760px;
+        color: #d9ddd1;
+        font-size: 14px;
+        line-height: 1.55;
+      }
+      .cookie-banner__actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .cookie-banner button,
+      .cookie-banner a,
+      .cookie-preferences-modal button {
+        min-height: 42px;
+        border-radius: 9px;
+        padding: 11px 15px;
+        font-size: 11px;
+        font-weight: 900;
+        letter-spacing: .04em;
+        text-transform: uppercase;
+        text-decoration: none;
+      }
+      .cookie-accept,
+      .cookie-save,
+      .cookie-accept-all {
+        border: 1px solid var(--lime);
+        color: #080900;
+        background: var(--lime);
+      }
+      .cookie-manage,
+      .cookie-policy-link {
+        border: 1px solid rgba(255,255,255,.16);
+        color: var(--text);
+        background: rgba(255,255,255,.06);
+      }
+      .cookie-preferences-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 1001;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity .22s ease;
+      }
+      .cookie-preferences-modal::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: rgba(0,0,0,.7);
+      }
+      .cookie-preferences-modal.is-open {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .cookie-preferences__box {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: min(92vw, 520px);
+        padding: 28px;
+        border: 1px solid rgba(207,255,32,.28);
+        border-radius: 18px;
+        background: linear-gradient(180deg, #12151a, #070907);
+        box-shadow: 0 30px 90px rgba(0,0,0,.72);
+        transform: translate(-50%, -47%) scale(.96);
+        transition: transform .22s ease;
+      }
+      .cookie-preferences-modal.is-open .cookie-preferences__box {
+        transform: translate(-50%, -50%) scale(1);
+      }
+      .cookie-preferences__box h3 {
+        margin: 0;
+        font-family: var(--font-heading);
+        font-size: 32px;
+        line-height: 1;
+        text-transform: uppercase;
+      }
+      .cookie-preferences__intro {
+        margin: 12px 0 20px;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+      .cookie-option {
+        display: grid;
+        gap: 6px;
+        margin: 12px 0;
+        padding: 14px;
+        border: 1px solid rgba(255,255,255,.12);
+        border-radius: 12px;
+        background: rgba(255,255,255,.04);
+      }
+      .cookie-option__head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        color: var(--text);
+        font-weight: 900;
+      }
+      .cookie-option p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      .cookie-option input {
+        width: 18px;
+        height: 18px;
+        accent-color: var(--lime);
+      }
+      .cookie-option__status {
+        color: var(--lime);
+        font-size: 12px;
+        font-weight: 900;
+        text-transform: uppercase;
+      }
+      .cookie-preferences__actions {
+        display: flex;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 20px;
+      }
       @media (max-width: 900px) {
         .menu-toggle { display: grid !important; }
       }
       @media (max-width: 560px) {
         .filter-wrap { margin-inline: 0; }
         .mobile-panel__content,
-        .cart-drawer__content { padding: 22px; }
+        .cart-drawer__content,
+        .wishlist-drawer__content { padding: 22px; }
         .login-modal__box {
           width: min(94vw, 360px);
           padding: 22px;
@@ -472,33 +792,63 @@
           min-height: 48px;
           padding: 13px 14px;
         }
+        .cookie-banner {
+          bottom: 14px;
+          width: calc(100vw - 24px);
+          grid-template-columns: 1fr;
+          align-items: stretch;
+          padding: 16px;
+          border-radius: 14px;
+        }
+        .cookie-banner__copy strong {
+          font-size: 22px;
+        }
+        .cookie-banner__actions {
+          justify-content: stretch;
+        }
+        .cookie-banner__actions > * {
+          flex: 1 1 120px;
+          display: grid;
+          place-items: center;
+        }
+        .cookie-preferences__box {
+          width: min(94vw, 370px);
+          padding: 22px;
+          border-radius: 14px;
+        }
+        .cookie-preferences__box h3 {
+          font-size: 28px;
+        }
+        .cookie-preferences__actions {
+          display: grid;
+        }
       }
     `;
     document.head.appendChild(style);
   }
 
   function collectProducts() {
-    productCards.forEach((card, index) => {
-      const name = $("h3", card)?.textContent.trim() || `Product ${index + 1}`;
-      const category = $("p", card)?.textContent.trim() || "Product";
-      const priceText = $("strong", card)?.textContent || "0";
-      const price = Number(priceText.replace(/[^0-9.]/g, "")) || 0;
-      const id = slugify(name);
-      const filter = card.dataset.filter || category;
+    productLookup = new Map();
 
-      card.dataset.id = id;
+    productCards.forEach((card, index) => {
+      const product = getProductFromCard(card, index);
+      const filter = card.dataset.filter || product.category;
+
+      card.dataset.id = product.id;
       card.dataset.index = String(index);
-      card.dataset.name = name;
-      card.dataset.category = category;
+      card.dataset.name = product.name;
+      card.dataset.category = product.category;
       card.dataset.filter = filter;
-      card.dataset.price = String(price);
+      card.dataset.price = String(product.price);
+      card.dataset.image = product.image;
+      productLookup.set(product.id, product);
 
       if (!$(`.js-add-cart`, card)) {
         const button = document.createElement("button");
         button.className = "js-add-cart";
         button.type = "button";
         button.textContent = "Add to Cart";
-        button.addEventListener("click", () => addToCart({ id, name, category, price }));
+        button.addEventListener("click", () => addToCart(product));
         card.appendChild(button);
       }
     });
@@ -517,9 +867,181 @@
     showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 1800);
   }
 
+  function getCookieConsent() {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.cookieConsent);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function saveCookieConsent(consent = "accepted", preferences = {}) {
+    const nextPreferences = {
+      essential: true,
+      cartWishlistStorage: true,
+      loginSession: true,
+      ...preferences,
+      savedAt: new Date().toISOString(),
+    };
+
+    try {
+      localStorage.setItem(STORAGE_KEYS.cookieConsent, consent);
+      localStorage.setItem(STORAGE_KEYS.cookiePreferences, JSON.stringify(nextPreferences));
+    } catch (error) {
+      console.warn("Cookie preference storage unavailable", error);
+    }
+  }
+
+  function createCookieConsentUI() {
+    if ($("[data-cookie-banner]")) return;
+
+    const banner = document.createElement("section");
+    banner.className = "cookie-banner";
+    banner.setAttribute("data-cookie-banner", "");
+    banner.setAttribute("aria-label", "Cookie notice");
+    banner.innerHTML = `
+      <div class="cookie-banner__copy">
+        <strong>Cookie Notice</strong>
+        <p>We use cookies and browser storage to improve your shopping experience, keep your cart and wishlist saved, and support secure login.</p>
+      </div>
+      <div class="cookie-banner__actions">
+        <button class="cookie-accept" type="button" data-cookie-accept>Accept</button>
+        <button class="cookie-manage" type="button" data-cookie-manage>Manage</button>
+        <a class="cookie-policy-link" href="cookies.html">Cookies Policy</a>
+      </div>
+    `;
+
+    const preferencesModal = document.createElement("div");
+    preferencesModal.className = "cookie-preferences-modal";
+    preferencesModal.setAttribute("data-cookie-preferences", "");
+    preferencesModal.innerHTML = `
+      <div class="cookie-preferences__box" role="dialog" aria-modal="true" aria-labelledby="cookie-preferences-title">
+        <div class="modal-head">
+          <h3 id="cookie-preferences-title">Cookie Preferences</h3>
+          <button class="close-btn" type="button" data-close-cookie-preferences aria-label="Close cookie preferences">×</button>
+        </div>
+        <p class="cookie-preferences__intro">Choose how Attraction Football can use browser storage for this device.</p>
+        <div class="cookie-option">
+          <div class="cookie-option__head">
+            <span>Essential cookies / storage</span>
+            <span class="cookie-option__status">Always active</span>
+          </div>
+          <p>Required for core website functions, security, and stable page behavior.</p>
+        </div>
+        <label class="cookie-option">
+          <span class="cookie-option__head">
+            <span>Cart &amp; wishlist storage</span>
+            <input type="checkbox" data-cookie-cart-wishlist checked />
+          </span>
+          <p>Keeps your cart and wishlist saved in this browser after refresh.</p>
+        </label>
+        <div class="cookie-option">
+          <div class="cookie-option__head">
+            <span>Login/session support</span>
+            <span class="cookie-option__status">Supabase Auth</span>
+          </div>
+          <p>Login sessions are handled securely by Supabase Auth. Passwords are not stored in browser localStorage.</p>
+        </div>
+        <div class="cookie-preferences__actions">
+          <button class="cookie-save" type="button" data-cookie-save>Save Preferences</button>
+          <button class="cookie-accept-all" type="button" data-cookie-accept-all>Accept All</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(banner);
+    document.body.appendChild(preferencesModal);
+
+    const openPreferences = () => preferencesModal.classList.add("is-open");
+    const closePreferences = () => preferencesModal.classList.remove("is-open");
+    const hideBanner = () => banner.classList.remove("is-visible");
+    const showBanner = () => {
+      if (!getCookieConsent()) banner.classList.add("is-visible");
+    };
+
+    banner.querySelector("[data-cookie-accept]")?.addEventListener("click", () => {
+      saveCookieConsent("accepted", { cartWishlistStorage: true });
+      hideBanner();
+      closePreferences();
+    });
+
+    banner.querySelector("[data-cookie-manage]")?.addEventListener("click", openPreferences);
+
+    preferencesModal.addEventListener("click", (event) => {
+      if (event.target === preferencesModal || event.target.matches("[data-close-cookie-preferences]")) {
+        closePreferences();
+      }
+    });
+
+    preferencesModal.querySelector("[data-cookie-save]")?.addEventListener("click", () => {
+      const cartWishlistStorage = Boolean(preferencesModal.querySelector("[data-cookie-cart-wishlist]")?.checked);
+      saveCookieConsent("custom", { cartWishlistStorage });
+      hideBanner();
+      closePreferences();
+    });
+
+    preferencesModal.querySelector("[data-cookie-accept-all]")?.addEventListener("click", () => {
+      const cartWishlist = preferencesModal.querySelector("[data-cookie-cart-wishlist]");
+      if (cartWishlist) cartWishlist.checked = true;
+      saveCookieConsent("accepted", { cartWishlistStorage: true });
+      hideBanner();
+      closePreferences();
+    });
+
+    showBanner();
+  }
+
+  function closeCookiePreferences() {
+    $("[data-cookie-preferences]")?.classList.remove("is-open");
+  }
+
   function updateCartCount() {
     const count = cart.reduce((sum, item) => sum + item.qty, 0);
     if (cartCount) cartCount.textContent = String(count);
+  }
+
+  function updateWishlistCount() {
+    if (wishlistCount) wishlistCount.textContent = String(wishlist.length);
+  }
+
+  function createWishlistHeaderButton() {
+    const headerActions = $(".header-actions", header || document);
+    if (!headerActions) return;
+
+    wishlistButton = $(".wishlist-button", headerActions);
+    if (!wishlistButton) {
+      wishlistButton = document.createElement("button");
+      wishlistButton.className = "wishlist-button";
+      wishlistButton.type = "button";
+      wishlistButton.setAttribute("aria-label", "Wishlist");
+      wishlistButton.innerHTML = `
+        <span class="wishlist-count">0</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21.3 10.6 20C5.4 15.3 2 12.2 2 8.4 2 5.3 4.4 3 7.5 3c1.7 0 3.4.8 4.5 2.1A6 6 0 0 1 16.5 3C19.6 3 22 5.3 22 8.4c0 3.8-3.4 6.9-8.6 11.6L12 21.3Zm0-2.7.1-.1C16.9 14.2 20 11.4 20 8.4 20 6.4 18.5 5 16.5 5c-1.5 0-3 1-3.6 2.4h-1.8C10.5 6 9 5 7.5 5 5.5 5 4 6.4 4 8.4c0 3 3.1 5.8 7.9 10.1l.1.1Z"/></svg>
+      `;
+      headerActions.insertBefore(wishlistButton, cartButton || menuToggle || null);
+    }
+
+    wishlistCount = $(".wishlist-count", wishlistButton);
+    updateWishlistCount();
+  }
+
+  function updateWishlistButtons() {
+    $$(".wish").forEach((button) => {
+      const card = button.closest(".product-card");
+      const id = button.dataset.wishlistId || card?.dataset.id;
+      if (!id) return;
+      const active = isWishlisted(id);
+      button.classList.toggle("is-active", active);
+      button.textContent = active ? "♥" : "♡";
+      button.setAttribute("aria-pressed", String(active));
+    });
+  }
+
+  function updateWishlistUI() {
+    updateWishlistCount();
+    updateWishlistButtons();
+    renderWishlistItems();
+    renderWishlistPage();
   }
 
   function addToCart(product) {
@@ -531,6 +1053,7 @@
     }
     writeStorage(STORAGE_KEYS.cart, cart);
     updateCartCount();
+    updateWishlistUI();
     renderCartItems();
     showToast(`${product.name} added to cart`);
   }
@@ -627,25 +1150,177 @@
     `;
   }
 
+
+
+  function createWishlistDrawer() {
+    if ($(".wishlist-drawer")) return;
+
+    const drawer = document.createElement("aside");
+    drawer.className = "wishlist-drawer";
+    drawer.innerHTML = `
+      <div class="wishlist-drawer__content" role="dialog" aria-modal="true" aria-label="Wishlist">
+        <div class="drawer-head">
+          <h3>Wishlist</h3>
+          <button class="close-btn" type="button" data-close-wishlist aria-label="Close wishlist">×</button>
+        </div>
+        <div class="wishlist-items"></div>
+        <div class="wishlist-footer"></div>
+      </div>
+    `;
+    document.body.appendChild(drawer);
+
+    drawer.addEventListener("click", (event) => {
+      if (event.target === drawer || event.target.matches("[data-close-wishlist]")) closeWishlist();
+
+      const removeButton = event.target.closest("[data-wishlist-remove]");
+      if (removeButton) {
+        removeWishlistItem(removeButton.dataset.wishlistRemove);
+      }
+
+      const addButton = event.target.closest("[data-wishlist-add-cart]");
+      if (addButton) {
+        const item = wishlist.find((product) => product.id === addButton.dataset.wishlistAddCart);
+        if (item) addToCart(item);
+      }
+    });
+  }
+
+  function openWishlist() {
+    createWishlistDrawer();
+    renderWishlistItems();
+    $(".wishlist-drawer")?.classList.add("is-open");
+    document.body.classList.add("no-scroll");
+  }
+
+  function closeWishlist() {
+    $(".wishlist-drawer")?.classList.remove("is-open");
+    document.body.classList.remove("no-scroll");
+  }
+
+  function renderWishlistItems() {
+    const itemsContainer = $(".wishlist-items");
+    const footer = $(".wishlist-footer");
+    if (!itemsContainer || !footer) return;
+
+    if (!wishlist.length) {
+      itemsContainer.innerHTML = `<div class="empty-message">Your wishlist is empty.</div>`;
+      footer.innerHTML = `
+        <a class="cart-checkout wishlist-view-all" href="wishlist.html">View All Wishlist</a>
+      `;
+      return;
+    }
+
+    itemsContainer.innerHTML = wishlist
+      .map(
+        (item) => `
+          <article class="wishlist-item">
+            <img src="${escapeHTML(item.image || "assets/hero-football-boot.png")}" alt="${escapeHTML(item.name)}" loading="lazy" decoding="async" />
+            <div>
+              <h4>${escapeHTML(item.name)}</h4>
+              <p>${escapeHTML(item.category)} · ${money(item.price)}</p>
+              <div class="wishlist-item-actions">
+                <button type="button" data-wishlist-add-cart="${escapeHTML(item.id)}">Add to Cart</button>
+                <button type="button" data-wishlist-remove="${escapeHTML(item.id)}">Remove</button>
+              </div>
+            </div>
+          </article>
+        `
+      )
+      .join("");
+
+    footer.innerHTML = `
+      <a class="cart-checkout wishlist-view-all" href="wishlist.html">View All Wishlist</a>
+    `;
+  }
+
+  function toggleWishlist(product) {
+    const saved = isWishlisted(product.id);
+    wishlist = saved ? wishlist.filter((item) => item.id !== product.id) : [...wishlist, product];
+    saveWishlist();
+    showToast(saved ? "Removed from wishlist" : "Added to wishlist");
+  }
+
+  function removeWishlistItem(id) {
+    const item = wishlist.find((product) => product.id === id);
+    wishlist = wishlist.filter((product) => product.id !== id);
+    saveWishlist();
+    if (item) showToast("Removed from wishlist");
+  }
+
+  function renderWishlistPage() {
+    const grid = $("[data-wishlist-page-grid]");
+    const empty = $("[data-wishlist-empty]");
+    const count = $("[data-wishlist-page-count]");
+    if (!grid) return;
+
+    if (count) count.textContent = String(wishlist.length);
+
+    if (!wishlist.length) {
+      grid.innerHTML = "";
+      if (empty) empty.hidden = false;
+      return;
+    }
+
+    if (empty) empty.hidden = true;
+    grid.innerHTML = wishlist
+      .map(
+        (item) => `
+          <article class="product-card catalog-card wishlist-product-card" data-wishlist-id="${escapeHTML(item.id)}">
+            <button class="wish is-active" type="button" data-wishlist-remove="${escapeHTML(item.id)}" aria-label="Remove ${escapeHTML(item.name)} from wishlist" aria-pressed="true">♥</button>
+            <div class="product-image">
+              <img class="wishlist-product-img" src="${escapeHTML(item.image || "assets/hero-football-boot.png")}" alt="${escapeHTML(item.name)}" loading="lazy" decoding="async" />
+            </div>
+            <h3>${escapeHTML(item.name)}</h3>
+            <p>${escapeHTML(item.category)}</p>
+            <strong>${money(item.price)}</strong>
+            <div class="color-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+            <button class="wishlist-page-remove" type="button" data-wishlist-remove="${escapeHTML(item.id)}">Remove from Wishlist</button>
+            <button class="js-add-cart" type="button" data-wishlist-add-cart="${escapeHTML(item.id)}">Add to Cart</button>
+          </article>
+        `
+      )
+      .join("");
+  }
+
+  function bindWishlistPageActions() {
+    const pageSection = $("[data-wishlist-page]");
+    if (!pageSection || pageSection.dataset.wishlistBound === "true") return;
+    pageSection.dataset.wishlistBound = "true";
+
+    pageSection.addEventListener("click", (event) => {
+      const removeButton = event.target.closest("[data-wishlist-remove]");
+      if (removeButton) {
+        removeWishlistItem(removeButton.dataset.wishlistRemove);
+        return;
+      }
+
+      const addButton = event.target.closest("[data-wishlist-add-cart]");
+      if (addButton) {
+        const item = wishlist.find((product) => product.id === addButton.dataset.wishlistAddCart);
+        if (item) addToCart(item);
+      }
+    });
+  }
+
+
   function initWishlist() {
     $$(".wish").forEach((button) => {
+      if (button.dataset.wishlistBound === "true") return;
       const card = button.closest(".product-card");
-      const id = card?.dataset.id;
+      const id = card?.dataset.id || button.dataset.wishlistRemove;
       if (!id) return;
 
-      const isSaved = wishlist.includes(id);
-      button.classList.toggle("is-active", isSaved);
-      button.textContent = isSaved ? "♥" : "♡";
+      button.dataset.wishlistBound = "true";
+      button.dataset.wishlistId = id;
+      button.setAttribute("aria-pressed", String(isWishlisted(id)));
 
       button.addEventListener("click", () => {
-        const saved = wishlist.includes(id);
-        wishlist = saved ? wishlist.filter((item) => item !== id) : [...wishlist, id];
-        writeStorage(STORAGE_KEYS.wishlist, wishlist);
-        button.classList.toggle("is-active", !saved);
-        button.textContent = saved ? "♡" : "♥";
-        showToast(saved ? "Removed from wishlist" : "Added to wishlist");
+        const product = productLookup.get(id) || getProductFromCard(card);
+        toggleWishlist(product);
       });
     });
+
+    updateWishlistUI();
   }
 
   function createFilters() {
@@ -855,15 +1530,18 @@
       const { data, error } = await supabaseClient.auth.getSession();
       if (error) throw error;
       authUser = data?.session?.user || null;
+      loadWishlistForCurrentUser({ mergeGuest: Boolean(authUser) });
       updateAuthUI();
 
-      supabaseClient.auth.onAuthStateChange((_event, session) => {
+      supabaseClient.auth.onAuthStateChange((event, session) => {
         authUser = session?.user || null;
+        loadWishlistForCurrentUser({ mergeGuest: event === "SIGNED_IN" && Boolean(authUser) });
         updateAuthUI();
       });
     } catch (error) {
       console.warn("Supabase auth session check failed", error);
       authUser = null;
+      loadWishlistForCurrentUser();
       updateAuthUI();
     }
   }
@@ -996,6 +1674,7 @@
         if (error) throw error;
 
         authUser = data?.user || data?.session?.user || null;
+        loadWishlistForCurrentUser({ mergeGuest: Boolean(authUser) });
         updateAuthUI();
         showToast("Logged in successfully");
         closeLogin();
@@ -1056,6 +1735,7 @@
         if (error) throw error;
 
         authUser = data?.session?.user || null;
+        loadWishlistForCurrentUser({ mergeGuest: Boolean(authUser) });
         updateAuthUI();
 
         if (data?.session) {
@@ -1275,14 +1955,17 @@
 
   function bindHeaderActions() {
     cartButton?.addEventListener("click", openCart);
+    wishlistButton?.addEventListener("click", openWishlist);
     searchButton?.addEventListener("click", openSearch);
     accountButton?.addEventListener("click", openLogin);
 
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
         closeCart();
+        closeWishlist();
         closeSearch();
         closeLogin();
+        closeCookiePreferences();
         closeMobileDrawer();
       }
     });
@@ -1446,8 +2129,12 @@
   function boot() {
     injectInteractionStyles();
     collectProducts();
+    loadWishlistForCurrentUser();
+    createWishlistHeaderButton();
     createCartDrawer();
+    createWishlistDrawer();
     createSearchModal();
+    createCookieConsentUI();
     bindProductSearchInputs();
     createLoginModal();
     createMobileMenu();
@@ -1455,6 +2142,7 @@
     bindProductSortControls();
     bindCareerSelects();
     bindContactForm();
+    bindWishlistPageActions();
     initSupabaseAuth();
     initWishlist();
     initCarousel();

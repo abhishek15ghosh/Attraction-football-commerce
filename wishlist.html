@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>About Us | Attraction Football</title>
+  <title>Wishlist | Attraction Football</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Oswald:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <main class="page-shell contact-page about-page">
+  <main class="page-shell products-page wishlist-page">
     <header class="site-header">
       <a href="index.html" class="brand" aria-label="Attraction Football Home">
         <span class="brand-mark">A</span>
@@ -47,104 +47,30 @@
       </div>
     </header>
 
-    <section class="products-hero about-hero" aria-labelledby="about-title">
-      <p class="eyebrow lime">Company</p>
-      <h1 id="about-title">About Us</h1>
-      <p>Premium football gear built for players who demand quality, speed, comfort, and performance.</p>
+    <section class="products-hero wishlist-hero" aria-labelledby="wishlist-title">
+      <p class="eyebrow lime">Saved Gear</p>
+      <h1 id="wishlist-title">Wishlist</h1>
+      <p>Your saved Attraction Football products stay here so you can review them, remove them, or move them to cart.</p>
     </section>
 
-    <section class="shipping-section about-section" aria-label="About Attraction Football">
-      <div class="shipping-grid about-grid">
-        <article class="shipping-card shipping-card-large about-card">
-          <span class="shipping-icon">01</span>
-          <div>
-            <p class="eyebrow lime">Our Story</p>
-            <h3>Built for Players and Fans</h3>
-            <p>Attraction Football is a premium football store focused on boots, jerseys, t-shirts, footballs, and accessories for players and fans who expect sharp style and dependable performance.</p>
-            <p>Every collection is selected for match days, training sessions, and the football lifestyle beyond the pitch.</p>
-          </div>
-        </article>
-
-        <article class="shipping-card about-card">
-          <span class="shipping-icon">02</span>
-          <div>
-            <p class="eyebrow lime">Quality</p>
-            <h3>Premium Quality</h3>
-            <p>We focus on football products with strong materials, clean finishes, and a premium feel from first touch to final whistle.</p>
-          </div>
-        </article>
-
-        <article class="shipping-card about-card">
-          <span class="shipping-icon">03</span>
-          <div>
-            <p class="eyebrow lime">Trust</p>
-            <h3>Authentic Products</h3>
-            <p>Our catalog is built around authentic football gear that looks professional, performs well, and fits the modern game.</p>
-          </div>
-        </article>
-
-        <article class="shipping-card about-card">
-          <span class="shipping-icon">04</span>
-          <div>
-            <p class="eyebrow lime">Delivery</p>
-            <h3>Fast Delivery</h3>
-            <p>Orders are processed quickly with clear delivery support, and standard delivery is usually completed within 3 to 4 days after dispatch.</p>
-          </div>
-        </article>
-
-        <article class="shipping-card about-card">
-          <span class="shipping-icon">05</span>
-          <div>
-            <p class="eyebrow lime">Performance</p>
-            <h3>Player-Focused Design</h3>
-            <p>From boot grip to jersey comfort, every product is chosen with real football movement, speed, control, and confidence in mind.</p>
-          </div>
-        </article>
-
-        <article class="shipping-card shipping-card-large about-card">
-          <span class="shipping-icon">06</span>
-          <div>
-            <p class="eyebrow lime">Why Choose Us</p>
-            <h3>Premium Gear, Clear Support</h3>
-            <ul>
-              <li>Carefully selected football products for training, match days, and fan lifestyle.</li>
-              <li>Modern performance-focused collections across boots, jerseys, t-shirts, balls, and accessories.</li>
-              <li>Secure checkout with a clean, premium shopping experience.</li>
-              <li>Delivery within 3 to 4 days after dispatch for standard orders.</li>
-              <li>Customer support for orders, sizing, returns, and product selection.</li>
-            </ul>
-          </div>
-        </article>
-
-        <article class="shipping-card shipping-card-support about-card">
-          <span class="shipping-icon">07</span>
-          <div>
-            <p class="eyebrow lime">Brand Mission</p>
-            <h3>Premium Football for Every Player</h3>
-            <p>Our mission is to make premium football gear accessible, reliable, and stylish for every football lover.</p>
-          </div>
-        </article>
+    <section id="wishlist" class="products-section wishlist-section" aria-labelledby="wishlist-products-title" data-wishlist-page>
+      <div class="section-heading products-page-heading wishlist-page-heading">
+        <div>
+          <p class="eyebrow lime">Your Picks</p>
+          <h2 id="wishlist-products-title">Saved Wishlist</h2>
+        </div>
+        <p class="wishlist-page-count"><span data-wishlist-page-count>0</span> saved items</p>
       </div>
+
+      <div class="empty-message wishlist-empty-state" data-wishlist-empty>
+        <p>Your wishlist is empty.</p>
+        <a class="wishlist-shop-link" href="products.html">Shop Products</a>
+      </div>
+
+      <div class="product-grid wishlist-grid" data-wishlist-page-grid></div>
     </section>
 
-    <section id="services" class="service-bar" aria-label="Store benefits">
-      <article>
-        <span>▣</span>
-        <div><strong>Secure Payments</strong><small>100% secure checkout</small></div>
-      </article>
-      <article>
-        <span>⬡</span>
-        <div><strong>Authentic Products</strong><small>Official & genuine gear</small></div>
-      </article>
-      <article>
-        <span>▤</span>
-        <div><strong>Worldwide Shipping</strong><small>Delivering to your door</small></div>
-      </article>
-      <article>
-        <span>☏</span>
-        <div><strong>24/7 Customer Support</strong><small>We are here to help</small></div>
-      </article>
-    </section>
+    
 
     <footer class="site-footer" aria-labelledby="footer-title">
       <div class="footer-grid">
