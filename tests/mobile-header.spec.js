@@ -798,9 +798,9 @@ test("view all products opens products page with search filters cart wishlist an
   expect(productImageSources).toHaveLength(16);
   expect(new Set(productImageSources).size).toBe(productImageSources.length);
   expect(productImageSources).toEqual(expect.arrayContaining([
-    "assets/store-accessory-gloves.png",
-    "assets/store-accessory-shin-guards.png",
-    "assets/store-accessory-boot-bag.png",
+    "assets/store-accessory-gloves.avif",
+    "assets/store-accessory-shin-guards.avif",
+    "assets/store-accessory-boot-bag.avif",
   ]));
   await expectNoHorizontalOverflow(page);
 

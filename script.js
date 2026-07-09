@@ -1214,7 +1214,7 @@
       .map(
         (item) => `
           <article class="wishlist-item">
-            <img src="${escapeHTML(item.image || "assets/hero-football-boot.png")}" alt="${escapeHTML(item.name)}" loading="lazy" decoding="async" />
+            <img src="${escapeHTML(item.image || "assets/hero-football-boot.avif")}" alt="${escapeHTML(item.name)}" loading="lazy" decoding="async" />
             <div>
               <h4>${escapeHTML(item.name)}</h4>
               <p>${escapeHTML(item.category)} · ${money(item.price)}</p>
@@ -1268,7 +1268,7 @@
           <article class="product-card catalog-card wishlist-product-card" data-wishlist-id="${escapeHTML(item.id)}">
             <button class="wish is-active" type="button" data-wishlist-remove="${escapeHTML(item.id)}" aria-label="Remove ${escapeHTML(item.name)} from wishlist" aria-pressed="true">♥</button>
             <div class="product-image">
-              <img class="wishlist-product-img" src="${escapeHTML(item.image || "assets/hero-football-boot.png")}" alt="${escapeHTML(item.name)}" loading="lazy" decoding="async" />
+              <img class="wishlist-product-img" src="${escapeHTML(item.image || "assets/hero-football-boot.avif")}" alt="${escapeHTML(item.name)}" loading="lazy" decoding="async" />
             </div>
             <h3>${escapeHTML(item.name)}</h3>
             <p>${escapeHTML(item.category)}</p>
