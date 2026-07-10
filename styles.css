@@ -1801,6 +1801,13 @@ button {
   transform: translateY(8px) scale(0.97);
 }
 
+.jerseys-grid .jersey-page-img-travel {
+  width: min(82%, 198px);
+  max-height: 232px;
+  object-fit: contain;
+  transform: translateY(4px) scale(1.02);
+}
+
 .jerseys-grid .jersey-page-img-long,
 .jerseys-grid .jersey-page-img-keeper,
 .jerseys-grid .jersey-page-img-heritage {
