@@ -48,6 +48,8 @@
   let searchTerm = "";
   let currentSlide = 0;
   let authUser = null;
+  let authReady = !supabaseClient;
+  let authSessionPromise = Promise.resolve();
 
   const productCards = $$(".product-card");
   const cartButton = $(".cart-button");
@@ -1522,18 +1524,21 @@
 
   async function initSupabaseAuth() {
     if (!supabaseClient) {
+      authReady = true;
       updateAuthUI();
       return;
     }
+
+    authReady = false;
 
     try {
       const { data, error } = await supabaseClient.auth.getSession();
       if (error) throw error;
       authUser = data?.session?.user || null;
       loadWishlistForCurrentUser({ mergeGuest: Boolean(authUser) });
-      updateAuthUI();
 
       supabaseClient.auth.onAuthStateChange((event, session) => {
+        authReady = true;
         authUser = session?.user || null;
         loadWishlistForCurrentUser({ mergeGuest: event === "SIGNED_IN" && Boolean(authUser) });
         updateAuthUI();
@@ -1542,7 +1547,19 @@
       console.warn("Supabase auth session check failed", error);
       authUser = null;
       loadWishlistForCurrentUser();
+    } finally {
+      authReady = true;
       updateAuthUI();
+    }
+  }
+
+  async function waitForAuthReady() {
+    if (authReady) return;
+
+    try {
+      await authSessionPromise;
+    } catch (error) {
+      console.warn("Supabase auth readiness failed", error);
     }
   }
 
@@ -1771,22 +1788,30 @@
     }
   }
 
-  function openLogin() {
+  async function openLogin() {
+    await waitForAuthReady();
     createLoginModal();
     const modal = $(".login-modal");
-    modal?.classList.add("is-open");
-    document.body.classList.add("no-scroll");
+    if (!modal) return;
+
     resetAuthFeedback(modal);
     setAuthMode(authUser ? "account" : "login");
+    modal.classList.add("is-open");
+    document.body.classList.add("no-scroll");
     window.setTimeout(() => (authUser ? $("[data-logout]", modal) : $("#login-email", modal))?.focus(), 60);
   }
 
   function closeLogin() {
     const modal = $(".login-modal");
-    modal?.classList.remove("is-open");
+    if (!modal) return;
+
+    modal.classList.remove("is-open");
     document.body.classList.remove("no-scroll");
-    if (modal) resetAuthFeedback(modal);
-    setAuthMode("login");
+    resetAuthFeedback(modal);
+
+    window.setTimeout(() => {
+      if (!modal.classList.contains("is-open")) setAuthMode(authUser ? "account" : "login");
+    }, 260);
   }
 
   function setMobileDrawerState(isOpen) {
@@ -2143,7 +2168,7 @@
     bindCareerSelects();
     bindContactForm();
     bindWishlistPageActions();
-    initSupabaseAuth();
+    authSessionPromise = initSupabaseAuth();
     initWishlist();
     initCarousel();
     bindHeaderActions();
