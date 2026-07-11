@@ -64,7 +64,8 @@
   let mobileDrawer = $(".mobile-drawer");
   let drawerOverlay = $(".drawer-overlay");
 
-  const money = (number) => `$${Number(number).toFixed(2)}`;
+  const money = (number) => `${Number(number).toFixed(2)}`;
+  const ORDER_STATUSES = ["Pending", "Confirmed", "Shipped", "Delivered", "Cancelled"];
 
   const slugify = (text) =>
     text
@@ -869,6 +870,234 @@
     showToast.timer = window.setTimeout(() => toast.classList.remove("show"), 1800);
   }
 
+  function setAdminView(page, state, message = "") {
+    const loading = $("[data-admin-loading]", page);
+    const login = $("[data-admin-login-state]", page);
+    const denied = $("[data-admin-denied]", page);
+    const dashboard = $("[data-admin-dashboard]", page);
+    [loading, login, denied, dashboard].forEach((element) => {
+      if (element) element.hidden = true;
+    });
+    const target = {
+      loading,
+      login,
+      denied,
+      dashboard,
+    }[state];
+    if (target) target.hidden = false;
+    if (message && target) {
+      const messageNode = $("[data-admin-state-message]", target);
+      if (messageNode) messageNode.textContent = message;
+    }
+  }
+
+  function showAdminFeedback(page, type, message) {
+    const feedback = $("[data-admin-feedback]", page);
+    if (!feedback) return;
+    feedback.textContent = message;
+    feedback.className = `admin-feedback admin-feedback--${type}`;
+    feedback.hidden = false;
+  }
+
+  function hideAdminFeedback(page) {
+    const feedback = $("[data-admin-feedback]", page);
+    if (!feedback) return;
+    feedback.hidden = true;
+    feedback.textContent = "";
+  }
+
+  function formatOrderDate(value) {
+    if (!value) return "Not available";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString("en-IN", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  function renderAdminOrders(page, orders) {
+    const container = $("[data-admin-orders]", page);
+    const count = $("[data-admin-order-count]", page);
+    if (count) count.textContent = String(orders.length);
+    if (!container) return;
+
+    if (!orders.length) {
+      container.innerHTML = `<div class="admin-empty">No orders found yet.</div>`;
+      return;
+    }
+
+    container.innerHTML = orders
+      .map((order) => {
+        const items = order.order_items || [];
+        const address = [order.address, order.city, order.state, order.pin_code].filter(Boolean).join(", ");
+        const status = order.status || "Pending";
+        const statusOptions = ORDER_STATUSES.map(
+          (option) => `<option value="${option}" ${option === status ? "selected" : ""}>${option}</option>`
+        ).join("");
+        const itemsHtml = items
+          .map((item) => {
+            const price = Number(item.product_price || 0);
+            const qty = Number(item.quantity || 1);
+            return `
+              <article class="admin-order-item">
+                <img src="${escapeHTML(item.product_image || "assets/hero-football-boot.avif")}" alt="${escapeHTML(item.product_name || "Product")}" loading="lazy" decoding="async" />
+                <div>
+                  <strong>${escapeHTML(item.product_name || "Product")}</strong>
+                  <span>${escapeHTML(item.product_category || "Product")}</span>
+                  <small>${money(price)} × ${qty}</small>
+                </div>
+                <b>${money(price * qty)}</b>
+              </article>
+            `;
+          })
+          .join("");
+
+        return `
+          <article class="admin-order-card" data-admin-order-card data-order-id="${escapeHTML(order.id)}">
+            <div class="admin-order-topline">
+              <div>
+                <span class="admin-kicker">Order ID</span>
+                <h3>${escapeHTML(order.id)}</h3>
+                <p>${formatOrderDate(order.created_at)}</p>
+              </div>
+              <div class="admin-status-control">
+                <label for="status-${escapeHTML(order.id)}">Status</label>
+                <select id="status-${escapeHTML(order.id)}" data-admin-status>
+                  ${statusOptions}
+                </select>
+                <button type="button" data-admin-status-save>Save Status</button>
+              </div>
+            </div>
+            <div class="admin-order-grid">
+              <div>
+                <span class="admin-kicker">Customer</span>
+                <p><strong>${escapeHTML(order.customer_name || "Not available")}</strong></p>
+                <p>${escapeHTML(order.customer_email || "")}</p>
+                <p>${escapeHTML(order.customer_phone || "")}</p>
+              </div>
+              <div>
+                <span class="admin-kicker">Delivery Address</span>
+                <p>${escapeHTML(address || "Not available")}</p>
+                <p>${escapeHTML(order.note ? `Note: ${order.note}` : "No customer note")}</p>
+              </div>
+              <div>
+                <span class="admin-kicker">Order Total</span>
+                <p class="admin-order-total">${money(order.total_amount || 0)}</p>
+                <p>Current status: <strong data-admin-current-status>${escapeHTML(status)}</strong></p>
+              </div>
+            </div>
+            <div class="admin-items-wrap">
+              <span class="admin-kicker">Ordered Products</span>
+              ${itemsHtml || `<p>No items found for this order.</p>`}
+            </div>
+          </article>
+        `;
+      })
+      .join("");
+  }
+
+  async function loadAdminOrders(page) {
+    hideAdminFeedback(page);
+    const container = $("[data-admin-orders]", page);
+    if (container) container.innerHTML = `<div class="admin-empty">Loading orders...</div>`;
+    const { data, error } = await supabaseClient
+      .from("orders")
+      .select("*, order_items(*)")
+      .order("created_at", { ascending: false });
+    if (error) {
+      console.error("Admin orders could not be loaded", error);
+      showAdminFeedback(page, "error", "Orders could not be loaded. Please try again.");
+      if (container) container.innerHTML = `<div class="admin-empty">Orders could not be loaded.</div>`;
+      return;
+    }
+    renderAdminOrders(page, data || []);
+  }
+
+  async function updateAdminOrderStatus(page, button) {
+    const card = button.closest("[data-admin-order-card]");
+    const select = $("[data-admin-status]", card);
+    const statusLabel = $("[data-admin-current-status]", card);
+    const orderId = card?.dataset.orderId;
+    const status = select?.value;
+    if (!orderId || !ORDER_STATUSES.includes(status)) return;
+
+    button.disabled = true;
+    button.textContent = "Saving...";
+    hideAdminFeedback(page);
+    const { data, error } = await supabaseClient.rpc("update_order_status", {
+      p_order_id: orderId,
+      p_new_status: status,
+    });
+    if (error) {
+      console.error("Order status RPC failed", error);
+      showAdminFeedback(page, "error", "Status could not be updated. Please try again.");
+    } else {
+      const updatedOrder = Array.isArray(data) ? data[0] : data;
+      const updatedStatus = updatedOrder?.order_status || status;
+      if (statusLabel) statusLabel.textContent = updatedStatus;
+      if (select) select.value = updatedStatus;
+      showAdminFeedback(page, "success", `Order ${orderId} status updated to ${updatedStatus}.`);
+    }
+    button.disabled = false;
+    button.textContent = "Save Status";
+  }
+
+  async function checkAdminAccess(page) {
+    if (!page || page.dataset.adminChecking === "true") return;
+    page.dataset.adminChecking = "true";
+    setAdminView(page, "loading");
+    hideAdminFeedback(page);
+    try {
+      await waitForAuthReady();
+      if (!supabaseClient) {
+        setAdminView(page, "denied", "Supabase authentication is unavailable.");
+        return;
+      }
+      if (!authUser) {
+        setAdminView(page, "login", "Please login to view the admin dashboard.");
+        return;
+      }
+      const { data: isAdmin, error } = await supabaseClient.rpc("is_admin");
+      if (error) throw error;
+      if (!isAdmin) {
+        setAdminView(page, "denied", "Access denied");
+        return;
+      }
+      setAdminView(page, "dashboard");
+      await loadAdminOrders(page);
+    } catch (error) {
+      console.error("Admin access check failed", error);
+      setAdminView(page, "denied", "Access denied");
+      showAdminFeedback(page, "error", "Admin access could not be verified. Please try again.");
+    } finally {
+      page.dataset.adminChecking = "false";
+    }
+  }
+
+  function refreshAdminPageAccess() {
+    const page = $("[data-admin-page]");
+    if (page && page.dataset.adminBound === "true") checkAdminAccess(page);
+  }
+
+  function initAdminPage() {
+    const page = $("[data-admin-page]");
+    if (!page || page.dataset.adminBound === "true") return;
+    page.dataset.adminBound = "true";
+    page.addEventListener("click", (event) => {
+      const loginButton = event.target.closest("[data-admin-login]");
+      if (loginButton) openLogin();
+      const refreshButton = event.target.closest("[data-admin-refresh]");
+      if (refreshButton) checkAdminAccess(page);
+      const saveButton = event.target.closest("[data-admin-status-save]");
+      if (saveButton) updateAdminOrderStatus(page, saveButton);
+    });
+    checkAdminAccess(page);
+  }
+
   function getCookieConsent() {
     try {
       return localStorage.getItem(STORAGE_KEYS.cookieConsent);
@@ -1069,6 +1298,292 @@
     renderCartItems();
   }
 
+  function getCartTotal() {
+    return cart.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.qty || 0), 0);
+  }
+
+  function getCheckoutErrorMessage(error) {
+    const message = String(error?.message || "").toLowerCase();
+    const code = String(error?.code || "");
+
+    if (code === "42501" || message.includes("authentication required") || message.includes("jwt")) {
+      return "Please log in to continue.";
+    }
+    if (message.includes("invalid checkout details") || message.includes("pin code")) {
+      return "Please check your delivery details.";
+    }
+    if (message.includes("products are unavailable") || message.includes("product is unavailable")) {
+      return "One or more products are unavailable.";
+    }
+    if (
+      message.includes("cart is invalid") ||
+      message.includes("invalid item") ||
+      message.includes("maximum quantity")
+    ) {
+      return "Your cart contains an invalid item.";
+    }
+    return "We could not place your order. Please try again.";
+  }
+
+  function showCheckoutMessage(modal, type, message) {
+    const success = $("[data-checkout-success]", modal);
+    const error = $("[data-checkout-error]", modal);
+    if (!success || !error) return;
+    success.hidden = true;
+    error.hidden = true;
+    const target = type === "success" ? success : error;
+    target.textContent = message;
+    target.hidden = false;
+  }
+
+  function resetCheckoutMessage(modal) {
+    const success = $("[data-checkout-success]", modal);
+    const error = $("[data-checkout-error]", modal);
+    if (success) {
+      success.textContent = "";
+      success.hidden = true;
+    }
+    if (error) {
+      error.textContent = "";
+      error.hidden = true;
+    }
+  }
+
+  function updateCheckoutSummary(modal) {
+    const total = $("[data-checkout-total]", modal);
+    if (total) total.textContent = money(getCartTotal());
+  }
+
+  function createCheckoutModal() {
+    if ($(".checkout-modal")) return;
+    const modal = document.createElement("div");
+    modal.className = "checkout-modal";
+    modal.innerHTML = `
+      <div class="checkout-modal__box" role="dialog" aria-modal="true" aria-labelledby="checkout-title">
+        <div class="drawer-head">
+          <div>
+            <p class="eyebrow lime">Secure Order</p>
+            <h3 id="checkout-title">Checkout</h3>
+          </div>
+          <button class="close-btn" type="button" data-close-checkout aria-label="Close checkout">×</button>
+        </div>
+        <form class="checkout-form" data-checkout-form novalidate>
+          <div class="checkout-grid">
+            <label class="form-field" for="checkout-name">
+              <span>Full Name</span>
+              <input id="checkout-name" name="customer_name" type="text" autocomplete="name" required />
+            </label>
+            <label class="form-field" for="checkout-email">
+              <span>Email</span>
+              <input id="checkout-email" name="customer_email" type="email" autocomplete="email" readonly required />
+            </label>
+            <label class="form-field" for="checkout-phone">
+              <span>Phone Number</span>
+              <input id="checkout-phone" name="customer_phone" type="tel" autocomplete="tel" required />
+            </label>
+            <label class="form-field" for="checkout-city">
+              <span>City</span>
+              <input id="checkout-city" name="city" type="text" autocomplete="address-level2" required />
+            </label>
+            <label class="form-field" for="checkout-state">
+              <span>State</span>
+              <input id="checkout-state" name="state" type="text" autocomplete="address-level1" required />
+            </label>
+            <label class="form-field" for="checkout-pin">
+              <span>PIN Code</span>
+              <input id="checkout-pin" name="pin_code" type="text" inputmode="numeric" autocomplete="postal-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required />
+            </label>
+            <label class="form-field form-field--full" for="checkout-address">
+              <span>Delivery Address</span>
+              <textarea id="checkout-address" name="address" autocomplete="street-address" required></textarea>
+            </label>
+            <label class="form-field form-field--full" for="checkout-note">
+              <span>Optional Note</span>
+              <textarea id="checkout-note" name="note"></textarea>
+            </label>
+          </div>
+          <div class="checkout-summary">
+            <div class="cart-total"><span>Order Total</span><span data-checkout-total>₹0</span></div>
+          </div>
+          <p class="auth-message auth-error" data-checkout-error role="alert" hidden></p>
+          <p class="auth-message auth-success" data-checkout-success role="status" hidden></p>
+          <button class="login-submit checkout-submit" type="submit" data-place-order>Place Order</button>
+        </form>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal || event.target.matches("[data-close-checkout]")) closeCheckout();
+    });
+
+    const form = $("[data-checkout-form]", modal);
+    form?.addEventListener("submit", handleCheckoutSubmit);
+  }
+
+  function prefillCheckoutForm(modal) {
+    const metadata = authUser?.user_metadata || {};
+    const fields = {
+      customer_name: metadata.full_name || "",
+      customer_email: authUser?.email || "",
+      customer_phone: metadata.phone || "",
+    };
+    Object.entries(fields).forEach(([name, value]) => {
+      const field = $(`[name="${name}"]`, modal);
+      if (!field) return;
+      if (name === "customer_email") {
+        field.value = value;
+        field.readOnly = true;
+      } else if (!field.value) {
+        field.value = value;
+      }
+    });
+  }
+
+  async function openCheckout() {
+    if (!cart.length) {
+      showToast("Your cart is empty");
+      return;
+    }
+
+    await waitForAuthReady();
+    if (!authUser) {
+      closeCart();
+      showToast("Please login to place your order");
+      await openLogin();
+      return;
+    }
+
+    if (!supabaseClient) {
+      showToast("Checkout is unavailable right now");
+      return;
+    }
+
+    createCheckoutModal();
+    const modal = $(".checkout-modal");
+    if (!modal) return;
+    const form = $("[data-checkout-form]", modal);
+    if (form) {
+      form.dataset.checkoutToken = crypto.randomUUID();
+      form.dataset.submitting = "false";
+    }
+    resetCheckoutMessage(modal);
+    prefillCheckoutForm(modal);
+    updateCheckoutSummary(modal);
+    closeCart();
+    modal.classList.add("is-open");
+    document.body.classList.add("no-scroll");
+    window.setTimeout(() => $("#checkout-name", modal)?.focus(), 60);
+  }
+
+  function closeCheckout() {
+    const modal = $(".checkout-modal");
+    if (!modal) return;
+    modal.classList.remove("is-open");
+    if (!$([".cart-drawer.is-open", ".wishlist-drawer.is-open", ".login-modal.is-open", ".search-modal.is-open"].join(","))) {
+      document.body.classList.remove("no-scroll");
+    }
+  }
+
+  async function handleCheckoutSubmit(event) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const modal = form.closest(".checkout-modal");
+    if (!modal) return;
+    if (form.dataset.submitting === "true") return;
+
+    const submitButton = $("[data-place-order]", form);
+    form.dataset.submitting = "true";
+    if (submitButton) {
+      submitButton.disabled = true;
+      submitButton.textContent = "Placing Order...";
+    }
+
+    const releaseSubmission = () => {
+      form.dataset.submitting = "false";
+      if (submitButton) {
+        submitButton.disabled = false;
+        submitButton.textContent = "Place Order";
+      }
+    };
+
+    resetCheckoutMessage(modal);
+
+    if (!form.checkValidity()) {
+      showCheckoutMessage(modal, "error", "Please complete all required checkout fields.");
+      form.reportValidity();
+      releaseSubmission();
+      return;
+    }
+
+    await waitForAuthReady();
+    if (!authUser) {
+      showCheckoutMessage(modal, "error", "Please log in to continue.");
+      releaseSubmission();
+      return;
+    }
+    if (!cart.length) {
+      showCheckoutMessage(modal, "error", "Your cart is empty.");
+      releaseSubmission();
+      return;
+    }
+    if (!supabaseClient) {
+      showCheckoutMessage(modal, "error", "Checkout is unavailable right now.");
+      releaseSubmission();
+      return;
+    }
+
+    const formData = new FormData(form);
+    const checkoutToken = form.dataset.checkoutToken || crypto.randomUUID();
+    form.dataset.checkoutToken = checkoutToken;
+    const rpcPayload = {
+      p_customer_name: String(formData.get("customer_name") || "").trim(),
+      p_customer_phone: String(formData.get("customer_phone") || "").trim(),
+      p_address: String(formData.get("address") || "").trim(),
+      p_city: String(formData.get("city") || "").trim(),
+      p_state: String(formData.get("state") || "").trim(),
+      p_pin_code: String(formData.get("pin_code") || "").trim(),
+      p_note: String(formData.get("note") || "").trim() || null,
+      p_items: cart.map((item) => ({
+        product_id: item.id,
+        quantity: Number(item.qty || 1),
+      })),
+      p_checkout_token: checkoutToken,
+    };
+
+    try {
+      const { data, error } = await supabaseClient.rpc("place_order", rpcPayload);
+      if (error) throw error;
+
+      const order = Array.isArray(data) ? data[0] : data;
+      if (!order?.order_id || !Number.isFinite(Number(order.total_amount))) {
+        throw new Error("The order response was incomplete.");
+      }
+
+      cart = [];
+      writeStorage(STORAGE_KEYS.cart, cart);
+      updateCartCount();
+      renderCartItems();
+      const total = $("[data-checkout-total]", modal);
+      if (total) total.textContent = money(order.total_amount);
+      delete form.dataset.checkoutToken;
+      showCheckoutMessage(
+        modal,
+        "success",
+        `Order placed successfully. Order ID: ${order.order_id}. Total: ${money(order.total_amount)}`
+      );
+      showToast("Order placed successfully");
+      if (submitButton) submitButton.textContent = "Order Placed";
+    } catch (error) {
+      console.error("Checkout place_order RPC failed", {
+        error,
+        items: rpcPayload.p_items,
+      });
+      showCheckoutMessage(modal, "error", getCheckoutErrorMessage(error));
+      releaseSubmission();
+    }
+  }
+
   function createCartDrawer() {
     if ($(".cart-drawer")) return;
 
@@ -1098,7 +1613,7 @@
         showToast("Cart cleared");
       }
       if (event.target.matches("[data-checkout]")) {
-        showToast("Checkout demo: connect payment gateway later");
+        openCheckout();
       }
     });
   }
@@ -1542,6 +2057,7 @@
         authUser = session?.user || null;
         loadWishlistForCurrentUser({ mergeGuest: event === "SIGNED_IN" && Boolean(authUser) });
         updateAuthUI();
+        refreshAdminPageAccess();
       });
     } catch (error) {
       console.warn("Supabase auth session check failed", error);
@@ -1550,6 +2066,7 @@
     } finally {
       authReady = true;
       updateAuthUI();
+      refreshAdminPageAccess();
     }
   }
 
@@ -1988,6 +2505,7 @@
       if (event.key === "Escape") {
         closeCart();
         closeWishlist();
+        closeCheckout();
         closeSearch();
         closeLogin();
         closeCookiePreferences();
@@ -2169,6 +2687,7 @@
     bindContactForm();
     bindWishlistPageActions();
     authSessionPromise = initSupabaseAuth();
+    initAdminPage();
     initWishlist();
     initCarousel();
     bindHeaderActions();

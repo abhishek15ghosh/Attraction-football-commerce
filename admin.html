@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Shipping &amp; Delivery | Attraction Football</title>
+  <title>Admin Orders | Attraction Football</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Oswald:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <main class="page-shell contact-page shipping-page">
+  <main class="page-shell admin-page">
     <header class="site-header">
       <a href="index.html" class="brand" aria-label="Attraction Football Home">
         <span class="brand-mark">A</span>
@@ -47,67 +47,49 @@
       </div>
     </header>
 
-    <section class="products-hero shipping-hero" aria-labelledby="shipping-title">
-      <p class="eyebrow lime">Delivery Information</p>
-      <h1 id="shipping-title">Shipping &amp; Delivery</h1>
-      <p>We process and ship Attraction Football orders quickly, safely, and with clear tracking updates.</p>
+    <section class="products-hero admin-hero" aria-labelledby="admin-title">
+      <p class="eyebrow lime">Admin</p>
+      <h1 id="admin-title">Order Dashboard</h1>
+      <p>Review customer orders, delivery details, ordered products, totals, and fulfilment status.</p>
     </section>
 
-    <section class="shipping-section" aria-label="Shipping and delivery details">
-      <div class="shipping-grid">
-        <article class="shipping-card shipping-card-large">
-          <span class="shipping-icon">01</span>
-          <div>
-            <p class="eyebrow lime">Delivery Timeline</p>
-            <h3>3-4 Day Standard Delivery</h3>
-            <ul>
-              <li><strong>Order processing:</strong> 24-48 hours</li>
-              <li><strong>Standard delivery:</strong> 3-4 days after dispatch</li>
-              <li><strong>Tracking update:</strong> Sent after shipment is dispatched</li>
-            </ul>
-          </div>
-        </article>
+    <section class="admin-section" data-admin-page aria-label="Admin orders dashboard">
+      <div class="admin-state" data-admin-loading>
+        <p class="eyebrow lime">Secure Check</p>
+        <h2>Checking admin access...</h2>
+        <p>Order details stay hidden until your Supabase admin access is confirmed.</p>
+      </div>
 
-        <article class="shipping-card">
-          <span class="shipping-icon">02</span>
-          <div>
-            <p class="eyebrow lime">Shipping Coverage</p>
-            <h3>Across India</h3>
-            <p>We currently ship within India. Delivery time may vary depending on city, courier availability, weather, and holidays.</p>
-          </div>
-        </article>
+      <div class="admin-state" data-admin-login-state hidden>
+        <p class="eyebrow lime">Login Required</p>
+        <h2>Admin Login Required</h2>
+        <p data-admin-state-message>Please login to view the admin dashboard.</p>
+        <div class="admin-state-actions">
+          <button class="btn primary" type="button" data-admin-login>Login</button>
+          <button class="btn ghost" type="button" data-admin-refresh>Check Access</button>
+        </div>
+      </div>
 
-        <article class="shipping-card">
-          <span class="shipping-icon">03</span>
-          <div>
-            <p class="eyebrow lime">Order Tracking</p>
-            <h3>Clear Dispatch Updates</h3>
-            <p>Customers receive tracking details after dispatch. Tracking link/status can be checked from the Track Order page when available.</p>
-          </div>
-        </article>
+      <div class="admin-state admin-state--denied" data-admin-denied hidden>
+        <p class="eyebrow lime">Protected Area</p>
+        <h2>Access denied</h2>
+        <p data-admin-state-message>Access denied</p>
+        <button class="btn ghost" type="button" data-admin-refresh>Check Again</button>
+      </div>
 
-        <article class="shipping-card">
-          <span class="shipping-icon">04</span>
+      <div class="admin-dashboard" data-admin-dashboard hidden>
+        <div class="admin-dashboard-head">
           <div>
-            <p class="eyebrow lime">Delivery Charges</p>
-            <h3>Calculated at Checkout</h3>
-            <p>Shipping charges are calculated at checkout based on order value and delivery location.</p>
-            <p>Free shipping offers may be available during selected campaigns.</p>
+            <p class="eyebrow lime">Orders</p>
+            <h2>Customer Orders</h2>
           </div>
-        </article>
-
-        <article class="shipping-card shipping-card-support">
-          <span class="shipping-icon">05</span>
-          <div>
-            <p class="eyebrow lime">Delivery Support</p>
-            <h3>Need Help With a Delay?</h3>
-            <p>If delivery is delayed, contact Attraction Football support and we will help track the shipment.</p>
-            <div class="shipping-contact-links">
-              <a href="mailto:support@attractionfootball.com">support@attractionfootball.com</a>
-              <a href="tel:+919876543210">+91 98765 43210</a>
-            </div>
+          <div class="admin-stat">
+            <span data-admin-order-count>0</span>
+            <small>Total orders</small>
           </div>
-        </article>
+        </div>
+        <p class="admin-feedback" data-admin-feedback hidden></p>
+        <div class="admin-order-list" data-admin-orders></div>
       </div>
     </section>
 

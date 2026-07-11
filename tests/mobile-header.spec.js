@@ -70,6 +70,130 @@ async function openDrawer(page) {
     .toBe(viewport.width);
 }
 
+
+async function installSupabaseStub(page, options = {}) {
+  await page.addInitScript((config) => {
+    let currentUser = config.user || null;
+    let remainingPlaceOrderFailures = Number(config.failPlaceOrderAttempts || 0);
+    const listeners = [];
+    const state = {
+      rpcs: [],
+      placeOrderCalls: [],
+      statusUpdateCalls: [],
+      inserts: [],
+      updates: [],
+    };
+    window.__attractionSupabaseTestState = state;
+
+    const sessionForUser = () => (currentUser ? { user: currentUser } : null);
+
+    window.__attractionSupabaseClient = {
+      auth: {
+        getSession: async () => ({ data: { session: sessionForUser() }, error: null }),
+        onAuthStateChange: (callback) => {
+          listeners.push(callback);
+          return { data: { subscription: { unsubscribe: () => {} } } };
+        },
+        signInWithPassword: async ({ email }) => {
+          currentUser = { id: "auth-user-1", email, user_metadata: { full_name: "Admin User", phone: "+91 98765 43210" } };
+          listeners.forEach((listener) => listener("SIGNED_IN", { user: currentUser }));
+          return { data: { user: currentUser, session: { user: currentUser } }, error: null };
+        },
+        signUp: async ({ email, options }) => ({ data: { user: { email, user_metadata: options.data }, session: null }, error: null }),
+        signOut: async () => {
+          currentUser = null;
+          listeners.forEach((listener) => listener("SIGNED_OUT", null));
+          return { error: null };
+        },
+      },
+      rpc: async (name, payload = {}) => {
+        state.rpcs.push({ name, payload });
+        if (name === "is_admin") return { data: Boolean(config.isAdmin), error: config.adminError ? { message: config.adminError } : null };
+        if (name === "place_order") {
+          state.placeOrderCalls.push(payload);
+          if (config.placeOrderDelay) await new Promise((resolve) => setTimeout(resolve, config.placeOrderDelay));
+          if (remainingPlaceOrderFailures > 0) {
+            remainingPlaceOrderFailures -= 1;
+            return {
+              data: null,
+              error: {
+                code: config.placeOrderErrorCode || "P0001",
+                message: config.failPlaceOrder || "Order failed",
+              },
+            };
+          }
+          if (config.failPlaceOrder && !config.failPlaceOrderAttempts) {
+            return {
+              data: null,
+              error: {
+                code: config.placeOrderErrorCode || "P0001",
+                message: config.failPlaceOrder,
+              },
+            };
+          }
+          return {
+            data: [{
+              order_id: config.orderId || "order-test-001",
+              total_amount: config.serverTotal ?? 219.99,
+              order_status: "Pending",
+            }],
+            error: null,
+          };
+        }
+        if (name === "update_order_status") {
+          state.statusUpdateCalls.push(payload);
+          if (config.failStatusUpdate) return { data: null, error: { message: config.failStatusUpdate } };
+          return {
+            data: [{
+              order_id: payload.p_order_id,
+              order_status: payload.p_new_status,
+              status_updated_at: "2026-07-11T11:00:00.000Z",
+            }],
+            error: null,
+          };
+        }
+        return { data: null, error: { message: "Unknown RPC" } };
+      },
+      from: (table) => ({
+        insert: (payload) => {
+          state.inserts.push({ table, payload });
+          return Promise.resolve({ data: payload, error: null });
+        },
+        select: () => ({
+          order: async () => ({ data: config.orders || [], error: config.ordersError ? { message: config.ordersError } : null }),
+        }),
+        update: (payload) => ({
+          eq: async (column, value) => {
+            state.updates.push({ table, payload, column, value });
+            return { data: null, error: null };
+          },
+        }),
+      }),
+    };
+  }, options);
+}
+
+async function addFirstProductToCart(page) {
+  const firstProduct = page.locator(".product-card").first();
+  await firstProduct.getByRole("button", { name: "Add to Cart" }).click();
+  await expect(page.locator(".cart-count")).toHaveText("1");
+}
+
+async function openCheckoutWithProduct(page) {
+  await addFirstProductToCart(page);
+  await page.locator(".cart-button").click();
+  await page.locator(".cart-drawer").getByRole("button", { name: "Checkout" }).click();
+}
+
+async function fillCheckoutDelivery(page, values = {}) {
+  await page.locator("#checkout-address").fill(values.address || "42 Football Street");
+  await page.locator("#checkout-city").fill(values.city || "Kolkata");
+  await page.locator("#checkout-state").fill(values.state || "West Bengal");
+  await page.locator("#checkout-pin").fill(values.pin || "700001");
+  if (values.note) await page.locator("#checkout-note").fill(values.note);
+}
+
+
 test.beforeEach(async ({ page }) => {
   fs.mkdirSync(screenshotDir, { recursive: true });
   await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -287,7 +411,7 @@ test("wishlist header drawer and wishlist page work like cart", async ({ page })
   await page.locator('.header-actions button[aria-label="Wishlist"]').click();
   await expect(wishlistDrawer).toHaveClass(/is-open/);
   await expect(wishlistDrawer.getByText("Predator Elite FG")).toBeVisible();
-  await expect(wishlistDrawer.getByText("Football Shoes · $219.99")).toBeVisible();
+  await expect(wishlistDrawer.getByText(/Football Shoes · .*219\.99/)).toBeVisible();
   await expect(wishlistDrawer.locator(".wishlist-item img")).toBeVisible();
 
   await wishlistDrawer.getByRole("button", { name: "Add to Cart", exact: true }).click();
@@ -761,7 +885,8 @@ test("premium footer renders ecommerce links newsletter trust row and responsive
       expect(rect.scrollWidth).toBeLessThanOrEqual(rect.clientWidth + 1);
     }
 
-    expect(footerMetrics.links.length).toBeGreaterThanOrEqual(19);
+    expect(footerMetrics.links.length).toBeGreaterThanOrEqual(18);
+    expect(footerMetrics.links.map((link) => link.text)).not.toContain("New Collection");
     for (const link of footerMetrics.links) {
       expect(link.width, `${link.text} link width`).toBeGreaterThan(0);
       expect(link.height, `${link.text} link height`).toBeGreaterThan(0);
@@ -1181,6 +1306,326 @@ test("t-shirts nav opens dedicated category page with filters search sort cart w
   await waitForImages(page.locator(".tshirts-grid .product-card:nth-child(-n + 2) img"));
   await page.locator(".tshirts-section").screenshot({ path: path.join(screenshotDir, "t-shirts-mobile.png") });
 });
+
+test("checkout requires login before placing an order", async ({ page }) => {
+  await installSupabaseStub(page, { user: null });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await openCheckoutWithProduct(page);
+
+  const loginModal = page.locator(".login-modal");
+  await expect(loginModal).toHaveClass(/is-open/);
+  await expect(loginModal.getByRole("heading", { name: "Login", exact: true })).toBeVisible();
+  await expect(page.locator(".cart-count")).toHaveText("1");
+});
+
+test("checkout is a fixed responsive modal above page content", async ({ page }) => {
+  await installSupabaseStub(page, {
+    user: {
+      id: "user-modal-1",
+      email: "buyer@example.com",
+      user_metadata: { full_name: "Modal Buyer", phone: "+91 98765 43210" },
+    },
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await openCheckoutWithProduct(page);
+
+  const modal = page.locator(".checkout-modal");
+  const panel = page.locator(".checkout-modal__box");
+  await expect(modal).toHaveClass(/is-open/);
+  const desktopState = await modal.evaluate((element) => {
+    const styles = getComputedStyle(element);
+    const panelElement = element.querySelector(".checkout-modal__box");
+    const panelStyles = getComputedStyle(panelElement);
+    const textareaStyles = getComputedStyle(element.querySelector("textarea"));
+    return {
+      directBodyChild: element.parentElement === document.body,
+      position: styles.position,
+      zIndex: Number(styles.zIndex),
+      panelOverflowY: panelStyles.overflowY,
+      textareaBackground: textareaStyles.backgroundColor,
+      bodyLocked: document.body.classList.contains("no-scroll"),
+    };
+  });
+  expect(desktopState).toMatchObject({
+    directBodyChild: true,
+    position: "fixed",
+    panelOverflowY: "auto",
+    bodyLocked: true,
+  });
+  expect(desktopState.zIndex).toBeGreaterThan(1200);
+  expect(desktopState.textareaBackground).not.toBe("rgb(255, 255, 255)");
+
+  await panel.click({ position: { x: 20, y: 20 } });
+  await expect(modal).toHaveClass(/is-open/);
+  await page.keyboard.press("Escape");
+  await expect(modal).not.toHaveClass(/is-open/);
+  await expect.poll(() => page.evaluate(() => document.body.classList.contains("no-scroll"))).toBe(false);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator(".cart-button").click();
+  await page.locator(".cart-drawer").getByRole("button", { name: "Checkout" }).click();
+  await expect(modal).toHaveClass(/is-open/);
+  const panelBox = await panel.boundingBox();
+  expect(panelBox).not.toBeNull();
+  expect(panelBox.x).toBeGreaterThanOrEqual(0);
+  expect(panelBox.x + panelBox.width).toBeLessThanOrEqual(390);
+  expect(panelBox.y).toBeGreaterThanOrEqual(0);
+  expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(844);
+  await expectNoHorizontalOverflow(page);
+});
+
+test("checkout validates required fields before order insert", async ({ page }) => {
+  await installSupabaseStub(page, {
+    user: { id: "user-checkout-1", email: "buyer@example.com", user_metadata: { full_name: "Buyer One" } },
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await openCheckoutWithProduct(page);
+
+  const modal = page.locator(".checkout-modal");
+  await expect(modal).toHaveClass(/is-open/);
+  await modal.getByRole("button", { name: "Place Order" }).click();
+  await expect(modal.getByText("Please complete all required checkout fields.")).toBeVisible();
+
+  const placeOrderCalls = await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderCalls.length);
+  expect(placeOrderCalls).toBe(0);
+});
+
+test("checkout uses place_order RPC with server-authoritative fields and total", async ({ page }) => {
+  await installSupabaseStub(page, {
+    orderId: "order-test-123",
+    serverTotal: 487.65,
+    user: {
+      id: "user-checkout-2",
+      email: "buyer@example.com",
+      user_metadata: { full_name: "Buyer Two", phone: "+91 98765 43210" },
+    },
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await openCheckoutWithProduct(page);
+
+  await expect(page.locator("#checkout-email")).toHaveValue("buyer@example.com");
+  await expect(page.locator("#checkout-email")).toHaveAttribute("readonly", "");
+  await fillCheckoutDelivery(page, { note: "Call before delivery" });
+  await page.locator(".checkout-modal").getByRole("button", { name: "Place Order" }).click();
+
+  await expect(
+    page.locator(".checkout-modal").getByText("Order placed successfully. Order ID: order-test-123. Total: 487.65")
+  ).toBeVisible();
+  await expect(page.locator("[data-checkout-total]")).toHaveText("487.65");
+  await expect(page.locator(".cart-count")).toHaveText("0");
+
+  const state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(state.placeOrderCalls).toHaveLength(1);
+  const payload = state.placeOrderCalls[0];
+  expect(Object.keys(payload).sort()).toEqual([
+    "p_address",
+    "p_checkout_token",
+    "p_city",
+    "p_customer_name",
+    "p_customer_phone",
+    "p_items",
+    "p_note",
+    "p_pin_code",
+    "p_state",
+  ]);
+  expect(payload.p_items).toEqual([{ product_id: "predator-elite-fg", quantity: 1 }]);
+  expect(payload.p_checkout_token).toMatch(/^[0-9a-f-]{36}$/i);
+  expect(payload).not.toHaveProperty("customer_email");
+  expect(payload).not.toHaveProperty("user_id");
+  expect(payload).not.toHaveProperty("status");
+  expect(payload).not.toHaveProperty("total_amount");
+  expect(payload.p_items[0]).not.toHaveProperty("product_price");
+  expect(payload.p_items[0]).not.toHaveProperty("product_name");
+  expect(payload.p_items[0]).not.toHaveProperty("product_category");
+  expect(payload.p_items[0]).not.toHaveProperty("product_image");
+  expect(state.inserts).toEqual([]);
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("attraction_cart_v1") || "[]"))).toEqual([]);
+});
+
+test("failed order creation keeps cart contents", async ({ page }) => {
+  await installSupabaseStub(page, {
+    failPlaceOrder: "relation public.orders leaked internal database detail",
+    user: {
+      id: "user-checkout-3",
+      email: "buyer@example.com",
+      user_metadata: { full_name: "Buyer Three", phone: "+91 98765 43210" },
+    },
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await openCheckoutWithProduct(page);
+
+  await fillCheckoutDelivery(page, {
+    address: "21 Neon Road",
+    city: "Mumbai",
+    state: "Maharashtra",
+    pin: "400001",
+  });
+  await page.locator(".checkout-modal").getByRole("button", { name: "Place Order" }).click();
+
+  await expect(page.locator(".checkout-modal").getByText("We could not place your order. Please try again.")).toBeVisible();
+  await expect(page.locator(".checkout-modal")).not.toContainText("public.orders");
+  await expect(page.locator(".cart-count")).toHaveText("1");
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("attraction_cart_v1") || "[]").length)).toBe(1);
+});
+
+test("checkout safely reports unavailable products and keeps the cart", async ({ page }) => {
+  await installSupabaseStub(page, {
+    failPlaceOrder: "One or more products are unavailable. SQL detail must stay private.",
+    user: {
+      id: "user-checkout-4",
+      email: "buyer@example.com",
+      user_metadata: { full_name: "Buyer Four", phone: "+91 98765 43210" },
+    },
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await openCheckoutWithProduct(page);
+  await fillCheckoutDelivery(page);
+  await page.locator(".checkout-modal").getByRole("button", { name: "Place Order" }).click();
+
+  await expect(page.locator(".checkout-modal").getByText("One or more products are unavailable.")).toBeVisible();
+  await expect(page.locator(".checkout-modal")).not.toContainText("SQL detail");
+  await expect(page.locator(".cart-count")).toHaveText("1");
+});
+
+test("checkout reuses its token when a failed submission is retried", async ({ page }) => {
+  await installSupabaseStub(page, {
+    failPlaceOrder: "Temporary database failure",
+    failPlaceOrderAttempts: 1,
+    orderId: "order-retry-001",
+    serverTotal: 219.99,
+    user: {
+      id: "user-checkout-5",
+      email: "buyer@example.com",
+      user_metadata: { full_name: "Buyer Five", phone: "+91 98765 43210" },
+    },
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await openCheckoutWithProduct(page);
+  await fillCheckoutDelivery(page);
+
+  const placeOrder = page.locator(".checkout-modal").getByRole("button", { name: "Place Order" });
+  await placeOrder.click();
+  await expect(page.locator(".checkout-modal").getByText("We could not place your order. Please try again.")).toBeVisible();
+  await expect(placeOrder).toBeEnabled();
+  await placeOrder.click();
+  await expect(page.locator(".checkout-modal").getByText(/Order ID: order-retry-001/)).toBeVisible();
+
+  const calls = await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderCalls);
+  expect(calls).toHaveLength(2);
+  expect(calls[1].p_checkout_token).toBe(calls[0].p_checkout_token);
+});
+
+test("checkout blocks rapid duplicate submissions", async ({ page }) => {
+  await installSupabaseStub(page, {
+    placeOrderDelay: 150,
+    orderId: "order-single-001",
+    user: {
+      id: "user-checkout-6",
+      email: "buyer@example.com",
+      user_metadata: { full_name: "Buyer Six", phone: "+91 98765 43210" },
+    },
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await openCheckoutWithProduct(page);
+  await fillCheckoutDelivery(page);
+
+  await page.locator("[data-checkout-form]").evaluate((form) => {
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+
+  await expect(page.locator(".checkout-modal").getByText(/Order ID: order-single-001/)).toBeVisible();
+  const calls = await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderCalls);
+  expect(calls).toHaveLength(1);
+});
+
+test("admin page denies non-admin users before showing order data", async ({ page }) => {
+  await installSupabaseStub(page, {
+    isAdmin: false,
+    user: { id: "user-not-admin", email: "player@example.com", user_metadata: { full_name: "Player" } },
+    orders: [
+      {
+        id: "hidden-order",
+        customer_name: "Hidden Customer",
+        order_items: [],
+      },
+    ],
+  });
+  await page.goto("/admin.html", { waitUntil: "domcontentloaded" });
+
+  await expect(page.getByRole("heading", { name: "Access denied", exact: true })).toBeVisible();
+  await expect(page.getByText("Hidden Customer")).toHaveCount(0);
+  await expectNoHorizontalOverflow(page);
+});
+
+test("admin dashboard renders orders and updates order status", async ({ page }) => {
+  await installSupabaseStub(page, {
+    isAdmin: true,
+    user: { id: "admin-user", email: "ag203328@gmail.com", user_metadata: { full_name: "Admin" } },
+    orders: [
+      {
+        id: "order-admin-001",
+        created_at: "2026-07-11T10:30:00.000Z",
+        customer_name: "Ravi Customer",
+        customer_email: "ravi@example.com",
+        customer_phone: "+91 90000 11111",
+        address: "11 Match Street",
+        city: "Delhi",
+        state: "Delhi",
+        pin_code: "110001",
+        note: "Leave at reception",
+        total_amount: 4299,
+        status: "Pending",
+        order_items: [
+          {
+            product_image: "assets/hero-football-boot.avif",
+            product_name: "Predator Elite FG",
+            product_category: "Football Shoes",
+            product_price: 4299,
+            quantity: 1,
+          },
+        ],
+      },
+    ],
+  });
+  await page.goto("/admin.html", { waitUntil: "domcontentloaded" });
+
+  await expect(page.getByRole("heading", { name: "Customer Orders" })).toBeVisible();
+  await expect(page.getByText("Ravi Customer")).toBeVisible();
+  await expect(page.getByText("Predator Elite FG")).toBeVisible();
+  await expect(page.getByText(/4299\.00/).first()).toBeVisible();
+
+  await page.locator("[data-admin-status]").selectOption("Shipped");
+  await page.getByRole("button", { name: "Save Status" }).click();
+  await expect(page.getByText("Order order-admin-001 status updated to Shipped.")).toBeVisible();
+  await expect(page.locator("[data-admin-current-status]")).toHaveText("Shipped");
+
+  const state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(state.statusUpdateCalls).toEqual([{
+    p_order_id: "order-admin-001",
+    p_new_status: "Shipped",
+  }]);
+  expect(state.updates).toEqual([]);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoHorizontalOverflow(page);
+});
+
+test("order writes are RPC-only in the frontend source", async () => {
+  const source = fs.readFileSync(path.join(process.cwd(), "script.js"), "utf8");
+
+  expect(source).toContain('supabaseClient.rpc("place_order"');
+  expect(source).toContain('supabaseClient.rpc("update_order_status"');
+  expect(source).not.toMatch(/\.from\(["']orders["']\)\s*\.insert\s*\(/s);
+  expect(source).not.toMatch(/\.from\(["']order_items["']\)\s*\.insert\s*\(/s);
+  expect(source).not.toMatch(/\.from\(["']orders["']\)\s*\.update\s*\(/s);
+});
+
 
 test("account modal switches between login and register with frontend validation", async ({ page }) => {
   await page.addInitScript(() => {

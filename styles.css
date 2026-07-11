@@ -3254,3 +3254,423 @@ button {
     height: 190px;
   }
 }
+
+
+/* Admin orders */
+.admin-page .admin-hero {
+  margin-bottom: 28px;
+}
+
+.admin-section {
+  width: min(100%, 1180px);
+  margin: 0 auto 36px;
+}
+
+.admin-state,
+.admin-dashboard {
+  border: 1px solid rgba(207, 255, 32, 0.18);
+  border-radius: 18px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.03));
+  box-shadow: var(--shadow);
+  padding: clamp(22px, 4vw, 36px);
+}
+
+.admin-state[hidden],
+.admin-dashboard[hidden],
+.admin-feedback[hidden] {
+  display: none;
+}
+
+.admin-state h2,
+.admin-dashboard h2,
+.admin-order-card h3 {
+  margin: 0;
+  font-family: var(--font-heading);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.admin-state p,
+.admin-order-card p {
+  color: var(--muted);
+}
+
+.admin-state-actions,
+.admin-dashboard-head,
+.admin-order-topline,
+.admin-order-grid {
+  display: flex;
+  gap: 18px;
+}
+
+.admin-state-actions {
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+.admin-dashboard-head,
+.admin-order-topline {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.admin-stat {
+  min-width: 130px;
+  border: 1px solid rgba(207, 255, 32, 0.18);
+  border-radius: 14px;
+  padding: 14px 16px;
+  text-align: right;
+  background: rgba(207, 255, 32, 0.07);
+}
+
+.admin-stat span {
+  display: block;
+  color: var(--lime);
+  font-family: var(--font-heading);
+  font-size: 2rem;
+  line-height: 1;
+}
+
+.admin-stat small,
+.admin-kicker {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.admin-feedback {
+  margin: 22px 0 0;
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-weight: 800;
+}
+
+.admin-feedback--success {
+  color: var(--lime);
+  background: rgba(207, 255, 32, 0.1);
+  border: 1px solid rgba(207, 255, 32, 0.24);
+}
+
+.admin-feedback--error {
+  color: #ffb4b4;
+  background: rgba(255, 62, 62, 0.11);
+  border: 1px solid rgba(255, 92, 92, 0.2);
+}
+
+.admin-order-list {
+  display: grid;
+  gap: 22px;
+  margin-top: 24px;
+}
+
+.admin-empty {
+  border: 1px dashed rgba(255, 255, 255, 0.16);
+  border-radius: 14px;
+  color: var(--muted);
+  padding: 24px;
+  text-align: center;
+}
+
+.admin-order-card {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  background: rgba(3, 4, 5, 0.58);
+  padding: clamp(18px, 3vw, 26px);
+}
+
+.admin-order-topline {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 18px;
+}
+
+.admin-order-topline h3 {
+  margin-top: 8px;
+  word-break: break-word;
+}
+
+.admin-status-control {
+  display: grid;
+  gap: 8px;
+  min-width: 210px;
+}
+
+.admin-status-control label {
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.admin-status-control select,
+.admin-status-control button {
+  min-height: 44px;
+  border-radius: 10px;
+  font-weight: 900;
+}
+
+.admin-status-control select {
+  border: 1px solid rgba(207, 255, 32, 0.35);
+  background: #070a08;
+  color: var(--text);
+  padding: 0 12px;
+}
+
+.admin-status-control button {
+  border: 0;
+  background: var(--lime);
+  color: #050603;
+  cursor: pointer;
+}
+
+.admin-status-control button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.admin-order-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 18px;
+}
+
+.admin-order-grid > div {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.admin-order-grid p {
+  margin: 8px 0 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.admin-order-total {
+  color: var(--lime) !important;
+  font-family: var(--font-heading);
+  font-size: 1.65rem;
+}
+
+.admin-items-wrap {
+  margin-top: 20px;
+}
+
+.admin-order-item {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  margin-top: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.admin-order-item img {
+  width: 68px;
+  height: 68px;
+  object-fit: contain;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.admin-order-item strong,
+.admin-order-item span,
+.admin-order-item small {
+  display: block;
+}
+
+.admin-order-item span,
+.admin-order-item small {
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.admin-order-item b {
+  color: var(--lime);
+}
+
+@media (max-width: 900px) {
+  .admin-dashboard-head,
+  .admin-order-topline {
+    flex-direction: column;
+  }
+
+  .admin-stat,
+  .admin-status-control {
+    width: 100%;
+    text-align: left;
+  }
+
+  .admin-order-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .admin-section {
+    margin-bottom: 24px;
+  }
+
+  .admin-order-card {
+    padding: 16px;
+  }
+
+  .admin-order-item {
+    grid-template-columns: 58px minmax(0, 1fr);
+  }
+
+  .admin-order-item img {
+    width: 56px;
+    height: 56px;
+  }
+
+  .admin-order-item b {
+    grid-column: 2;
+  }
+}
+/* Checkout is created dynamically and must remain above every page layer. */
+.checkout-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  padding: clamp(14px, 3vw, 32px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: rgba(0, 0, 0, 0.78);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.22s ease, visibility 0.22s ease;
+}
+
+.checkout-modal.is-open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.checkout-modal__box {
+  position: relative;
+  width: min(100%, 760px);
+  max-height: calc(100vh - 28px);
+  max-height: calc(100dvh - 28px);
+  padding: clamp(22px, 4vw, 34px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid rgba(207, 255, 32, 0.28);
+  border-radius: 16px;
+  background: linear-gradient(180deg, #12151a, #070907);
+  box-shadow: 0 32px 100px rgba(0, 0, 0, 0.82);
+  transform: translateY(14px) scale(0.98);
+  transition: transform 0.22s ease;
+}
+
+.checkout-modal.is-open .checkout-modal__box {
+  transform: translateY(0) scale(1);
+}
+
+.checkout-modal .drawer-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin-bottom: 22px;
+  padding-bottom: 12px;
+  background: linear-gradient(180deg, #12151a 76%, rgba(18, 21, 26, 0));
+}
+
+.checkout-modal .drawer-head h3 {
+  margin: 0;
+}
+
+.checkout-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 16px;
+}
+
+.checkout-grid .form-field--full {
+  grid-column: 1 / -1;
+}
+
+.checkout-modal .form-field > span {
+  color: #f3f5ef;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.checkout-modal .form-field input,
+.checkout-modal .form-field textarea {
+  width: 100%;
+  max-width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  padding: 14px 15px;
+  background: #0b0e0c;
+  color: #ffffff;
+  font: inherit;
+  line-height: 1.45;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.checkout-modal .form-field textarea {
+  min-height: 104px;
+  resize: vertical;
+}
+
+.checkout-modal .form-field input:focus,
+.checkout-modal .form-field textarea:focus {
+  border-color: #cfff20;
+  box-shadow: 0 0 0 3px rgba(207, 255, 32, 0.14);
+}
+
+.checkout-modal .form-field input[readonly] {
+  color: #c8cdbf;
+  background: #080a09;
+  cursor: not-allowed;
+}
+
+.checkout-summary {
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.checkout-modal .checkout-submit:disabled {
+  cursor: wait;
+  opacity: 0.72;
+  transform: none;
+}
+
+@media (max-width: 640px) {
+  .checkout-modal {
+    place-items: start center;
+    padding: 10px;
+  }
+
+  .checkout-modal__box {
+    width: 100%;
+    max-height: calc(100dvh - 20px);
+    padding: 20px 16px;
+    border-radius: 13px;
+  }
+
+  .checkout-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .checkout-grid .form-field--full {
+    grid-column: auto;
+  }
+}
