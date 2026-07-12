@@ -75,6 +75,7 @@ async function installSupabaseStub(page, options = {}) {
   await page.addInitScript((config) => {
     let currentUser = config.user || null;
     let remainingPlaceOrderFailures = Number(config.failPlaceOrderAttempts || 0);
+    let remainingCartMergeFailures = Number(config.failCartMergeAttempts || 0);
     const listeners = [];
     const state = {
       rpcs: [],
@@ -82,20 +83,84 @@ async function installSupabaseStub(page, options = {}) {
       statusUpdateCalls: [],
       inserts: [],
       updates: [],
+      cloudCarts: JSON.parse(JSON.stringify(config.cloudCarts || {})),
+      cloudWishlists: JSON.parse(JSON.stringify(config.cloudWishlists || {})),
     };
     window.__attractionSupabaseTestState = state;
+
+    const catalog = {
+      "predator-elite-fg": {
+        id: "predator-elite-fg",
+        name: "Predator Elite FG",
+        category: "Football Shoes",
+        price: 219.99,
+        image: "assets/shoe-retro-leather.avif",
+        is_active: true,
+      },
+      "phantom-control-pro": {
+        id: "phantom-control-pro",
+        name: "Phantom Control Pro",
+        category: "Football Shoes",
+        price: 199.99,
+        image: "assets/shoe-honeycomb-control.avif",
+        is_active: true,
+      },
+      ...(config.catalog || {}),
+    };
+    const mergeReceipts = new Set();
+
+    const cartFor = (userId) => {
+      if (!state.cloudCarts[userId]) state.cloudCarts[userId] = [];
+      return state.cloudCarts[userId];
+    };
+    const wishlistFor = (userId) => {
+      if (!state.cloudWishlists[userId]) state.cloudWishlists[userId] = [];
+      return state.cloudWishlists[userId];
+    };
+    const joinedCartRows = (userId) => cartFor(userId).map((item, index) => ({
+      product_id: item.product_id,
+      quantity: item.quantity,
+      created_at: item.created_at || `2026-07-12T00:00:${String(index).padStart(2, "0")}.000Z`,
+      products: catalog[item.product_id] || {
+        id: item.product_id,
+        name: item.product_id,
+        category: "Product",
+        price: 0,
+        image: "",
+        is_active: true,
+      },
+    }));
+    const joinedWishlistRows = (userId) => wishlistFor(userId).map((item, index) => ({
+      product_id: typeof item === "string" ? item : item.product_id,
+      created_at: `2026-07-12T00:01:${String(index).padStart(2, "0")}.000Z`,
+      products: catalog[typeof item === "string" ? item : item.product_id] || {
+        id: typeof item === "string" ? item : item.product_id,
+        name: typeof item === "string" ? item : item.product_id,
+        category: "Product",
+        price: 0,
+        image: "",
+        is_active: true,
+      },
+    }));
 
     const sessionForUser = () => (currentUser ? { user: currentUser } : null);
 
     window.__attractionSupabaseClient = {
       auth: {
-        getSession: async () => ({ data: { session: sessionForUser() }, error: null }),
+        getSession: async () => {
+          if (config.sessionDelay) await new Promise((resolve) => setTimeout(resolve, config.sessionDelay));
+          return { data: { session: sessionForUser() }, error: null };
+        },
         onAuthStateChange: (callback) => {
           listeners.push(callback);
           return { data: { subscription: { unsubscribe: () => {} } } };
         },
         signInWithPassword: async ({ email }) => {
-          currentUser = { id: "auth-user-1", email, user_metadata: { full_name: "Admin User", phone: "+91 98765 43210" } };
+          currentUser = config.usersByEmail?.[email] || {
+            id: "auth-user-1",
+            email,
+            user_metadata: { full_name: "Admin User", phone: "+91 98765 43210" },
+          };
           listeners.forEach((listener) => listener("SIGNED_IN", { user: currentUser }));
           return { data: { user: currentUser, session: { user: currentUser } }, error: null };
         },
@@ -109,6 +174,68 @@ async function installSupabaseStub(page, options = {}) {
       rpc: async (name, payload = {}) => {
         state.rpcs.push({ name, payload });
         if (name === "is_admin") return { data: Boolean(config.isAdmin), error: config.adminError ? { message: config.adminError } : null };
+        if (["set_cart_item", "remove_cart_item", "clear_cart", "merge_guest_cart"].includes(name)) {
+          if (name === "merge_guest_cart" && remainingCartMergeFailures > 0) {
+            remainingCartMergeFailures -= 1;
+            return { data: null, error: { message: "Temporary cart migration failure" } };
+          }
+          if (config.failCartRpc === name || config.failCartRpc === true) {
+            return { data: null, error: { message: "Cart synchronization failed" } };
+          }
+          const userId = currentUser?.id;
+          if (!userId) return { data: null, error: { code: "42501", message: "Authentication required" } };
+          const userCart = cartFor(userId);
+
+          if (name === "set_cart_item") {
+            const existing = userCart.find((item) => item.product_id === payload.p_product_id);
+            if (existing) existing.quantity = payload.p_quantity;
+            else userCart.push({ product_id: payload.p_product_id, quantity: payload.p_quantity });
+            return { data: payload.p_quantity, error: null };
+          }
+          if (name === "remove_cart_item") {
+            const index = userCart.findIndex((item) => item.product_id === payload.p_product_id);
+            if (index >= 0) userCart.splice(index, 1);
+            return { data: index >= 0, error: null };
+          }
+          if (name === "clear_cart") {
+            const count = userCart.length;
+            userCart.splice(0, userCart.length);
+            return { data: count, error: null };
+          }
+
+          const receipt = `${userId}:${payload.p_merge_token}`;
+          if (mergeReceipts.has(receipt)) {
+            return { data: { merged: true, already_processed: true, item_count: 0 }, error: null };
+          }
+          mergeReceipts.add(receipt);
+          for (const item of payload.p_items || []) {
+            const existing = userCart.find((saved) => saved.product_id === item.product_id);
+            if (existing) existing.quantity = Math.min(20, existing.quantity + item.quantity);
+            else userCart.push({ product_id: item.product_id, quantity: Math.min(20, item.quantity) });
+          }
+          return { data: { merged: true, already_processed: false, item_count: payload.p_items?.length || 0 }, error: null };
+        }
+        if (["set_wishlist_item", "remove_wishlist_item", "merge_guest_wishlist"].includes(name)) {
+          if (config.failWishlistRpc === name || config.failWishlistRpc === true) {
+            return { data: null, error: { message: "Wishlist synchronization failed" } };
+          }
+          const userId = currentUser?.id;
+          if (!userId) return { data: null, error: { code: "42501", message: "Authentication required" } };
+          const userWishlist = wishlistFor(userId);
+          if (name === "set_wishlist_item") {
+            if (!userWishlist.includes(payload.p_product_id)) userWishlist.push(payload.p_product_id);
+            return { data: true, error: null };
+          }
+          if (name === "remove_wishlist_item") {
+            const index = userWishlist.indexOf(payload.p_product_id);
+            if (index >= 0) userWishlist.splice(index, 1);
+            return { data: index >= 0, error: null };
+          }
+          for (const item of payload.p_items || []) {
+            if (!userWishlist.includes(item.product_id)) userWishlist.push(item.product_id);
+          }
+          return { data: payload.p_items?.length || 0, error: null };
+        }
         if (name === "place_order") {
           state.placeOrderCalls.push(payload);
           if (config.placeOrderDelay) await new Promise((resolve) => setTimeout(resolve, config.placeOrderDelay));
@@ -159,9 +286,31 @@ async function installSupabaseStub(page, options = {}) {
           state.inserts.push({ table, payload });
           return Promise.resolve({ data: payload, error: null });
         },
-        select: () => ({
-          order: async () => ({ data: config.orders || [], error: config.ordersError ? { message: config.ordersError } : null }),
-        }),
+        select: () => {
+          const filters = [];
+          const execute = async () => {
+            if (table === "cart_items") {
+              if (config.failCartLoad) return { data: null, error: { message: "Cart load failed" } };
+              const userId = filters.find(([column]) => column === "user_id")?.[1] || currentUser?.id;
+              return { data: joinedCartRows(userId), error: null };
+            }
+            if (table === "wishlist_items") {
+              if (config.failWishlistLoad) return { data: null, error: { message: "Wishlist load failed" } };
+              const userId = filters.find(([column]) => column === "user_id")?.[1] || currentUser?.id;
+              return { data: joinedWishlistRows(userId), error: null };
+            }
+            return { data: config.orders || [], error: config.ordersError ? { message: config.ordersError } : null };
+          };
+          const builder = {
+            eq: (column, value) => {
+              filters.push([column, value]);
+              return builder;
+            },
+            order: () => execute(),
+            then: (resolve, reject) => execute().then(resolve, reject),
+          };
+          return builder;
+        },
         update: (payload) => ({
           eq: async (column, value) => {
             state.updates.push({ table, payload, column, value });
@@ -171,6 +320,142 @@ async function installSupabaseStub(page, options = {}) {
       }),
     };
   }, options);
+}
+
+function createSharedCloudState() {
+  return {
+    carts: new Map(),
+    wishlists: new Map(),
+    catalog: new Map([
+      ["predator-elite-fg", {
+        id: "predator-elite-fg",
+        name: "Predator Elite FG",
+        category: "Football Shoes",
+        price: 219.99,
+        image: "assets/shoe-retro-leather.avif",
+        is_active: true,
+      }],
+      ["phantom-control-pro", {
+        id: "phantom-control-pro",
+        name: "Phantom Control Pro",
+        category: "Football Shoes",
+        price: 199.99,
+        image: "assets/shoe-honeycomb-control.avif",
+        is_active: true,
+      }],
+    ]),
+  };
+}
+
+async function installSharedCloudSupabaseStub(page, cloud, user) {
+  await page.exposeFunction("__attractionCloudRequest", async ({ type, name, payload, table, userId }) => {
+    const cart = cloud.carts.get(userId) || [];
+    const wishlist = cloud.wishlists.get(userId) || [];
+    cloud.carts.set(userId, cart);
+    cloud.wishlists.set(userId, wishlist);
+
+    if (type === "select") {
+      if (table === "cart_items") {
+        return {
+          data: cart.map((item, index) => ({
+            ...item,
+            created_at: `2026-07-12T01:00:${String(index).padStart(2, "0")}.000Z`,
+            products: cloud.catalog.get(item.product_id),
+          })),
+          error: null,
+        };
+      }
+      if (table === "wishlist_items") {
+        return {
+          data: wishlist.map((productId, index) => ({
+            product_id: productId,
+            created_at: `2026-07-12T01:01:${String(index).padStart(2, "0")}.000Z`,
+            products: cloud.catalog.get(productId),
+          })),
+          error: null,
+        };
+      }
+      return { data: [], error: null };
+    }
+
+    if (name === "set_cart_item") {
+      const existing = cart.find((item) => item.product_id === payload.p_product_id);
+      if (existing) existing.quantity = payload.p_quantity;
+      else cart.push({ product_id: payload.p_product_id, quantity: payload.p_quantity });
+      return { data: payload.p_quantity, error: null };
+    }
+    if (name === "remove_cart_item") {
+      const index = cart.findIndex((item) => item.product_id === payload.p_product_id);
+      if (index >= 0) cart.splice(index, 1);
+      return { data: index >= 0, error: null };
+    }
+    if (name === "clear_cart") {
+      const count = cart.length;
+      cart.splice(0, cart.length);
+      return { data: count, error: null };
+    }
+    if (name === "set_wishlist_item") {
+      if (!wishlist.includes(payload.p_product_id)) wishlist.push(payload.p_product_id);
+      return { data: true, error: null };
+    }
+    if (name === "remove_wishlist_item") {
+      const index = wishlist.indexOf(payload.p_product_id);
+      if (index >= 0) wishlist.splice(index, 1);
+      return { data: index >= 0, error: null };
+    }
+    if (name === "merge_guest_cart" || name === "merge_guest_wishlist") {
+      return { data: name === "merge_guest_cart" ? { merged: true } : 0, error: null };
+    }
+    if (name === "is_admin") return { data: false, error: null };
+    return { data: null, error: { message: `Unknown RPC: ${name}` } };
+  });
+
+  await page.addInitScript((initialUser) => {
+    localStorage.setItem("attractionCookieConsent", "accepted");
+    let currentUser = initialUser;
+    const listeners = [];
+    window.__attractionSupabaseClient = {
+      auth: {
+        getSession: async () => ({ data: { session: currentUser ? { user: currentUser } : null }, error: null }),
+        onAuthStateChange: (callback) => {
+          listeners.push(callback);
+          return { data: { subscription: { unsubscribe: () => {} } } };
+        },
+        signInWithPassword: async () => ({ data: { user: currentUser, session: { user: currentUser } }, error: null }),
+        signUp: async () => ({ data: { user: null, session: null }, error: null }),
+        signOut: async () => {
+          currentUser = null;
+          listeners.forEach((listener) => listener("SIGNED_OUT", null));
+          return { error: null };
+        },
+      },
+      rpc: (name, payload = {}) => window.__attractionCloudRequest({
+        type: "rpc",
+        name,
+        payload,
+        userId: currentUser?.id,
+      }),
+      from: (table) => ({
+        select: () => {
+          const filters = [];
+          const execute = () => window.__attractionCloudRequest({
+            type: "select",
+            table,
+            userId: filters.find(([column]) => column === "user_id")?.[1] || currentUser?.id,
+          });
+          const builder = {
+            eq: (column, value) => {
+              filters.push([column, value]);
+              return builder;
+            },
+            order: () => execute(),
+            then: (resolve, reject) => execute().then(resolve, reject),
+          };
+          return builder;
+        },
+      }),
+    };
+  }, user);
 }
 
 async function addFirstProductToCart(page) {
@@ -191,6 +476,24 @@ async function fillCheckoutDelivery(page, values = {}) {
   await page.locator("#checkout-state").fill(values.state || "West Bengal");
   await page.locator("#checkout-pin").fill(values.pin || "700001");
   if (values.note) await page.locator("#checkout-note").fill(values.note);
+}
+
+async function loginAs(page, email) {
+  await page.locator('.header-actions button[aria-label="Account"]').click();
+  const modal = page.locator(".login-modal");
+  await expect(modal).toHaveClass(/is-open/);
+  await modal.locator("#login-email").fill(email);
+  await modal.locator("#login-password").fill("valid-password");
+  await modal.locator("[data-login-form] [type=submit]").click();
+  await expect(modal).not.toHaveClass(/is-open/);
+}
+
+async function logoutCurrentUser(page) {
+  await page.locator('.header-actions button[aria-label="Account"]').click();
+  const modal = page.locator(".login-modal");
+  await expect(modal).toHaveClass(/is-open/);
+  await modal.getByRole("button", { name: "Logout", exact: true }).click();
+  await expect(modal).not.toHaveClass(/is-open/);
 }
 
 
@@ -1307,6 +1610,375 @@ test("t-shirts nav opens dedicated category page with filters search sort cart w
   await page.locator(".tshirts-section").screenshot({ path: path.join(screenshotDir, "t-shirts-mobile.png") });
 });
 
+test("Supabase user IDs isolate carts and wishlists while switching accounts", async ({ page }) => {
+  const usersByEmail = {
+    "user-a@example.com": {
+      id: "user-a-id",
+      email: "user-a@example.com",
+      user_metadata: { full_name: "User A", phone: "+91 90000 00001" },
+    },
+    "user-b@example.com": {
+      id: "user-b-id",
+      email: "user-b@example.com",
+      user_metadata: { full_name: "User B", phone: "+91 90000 00002" },
+    },
+  };
+  await installSupabaseStub(page, { user: null, usersByEmail });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await loginAs(page, "user-a@example.com");
+  const productA = page.locator(".product-card").nth(0);
+  await productA.getByRole("button", { name: "Add to Cart" }).click();
+  await productA.locator(".wish").click();
+  await expect(page.locator(".cart-count")).toHaveText("1");
+  await expect(page.locator(".wishlist-count").first()).toHaveText("1");
+
+  await logoutCurrentUser(page);
+  await expect(page.locator(".cart-count")).toHaveText("0");
+  await expect(page.locator(".wishlist-count").first()).toHaveText("0");
+
+  await loginAs(page, "user-b@example.com");
+  await expect(page.locator(".cart-count")).toHaveText("0");
+  await expect(page.locator(".wishlist-count").first()).toHaveText("0");
+  const productB = page.locator(".product-card").nth(1);
+  await productB.getByRole("button", { name: "Add to Cart" }).click();
+  await productB.locator(".wish").click();
+  await logoutCurrentUser(page);
+
+  await loginAs(page, "user-a@example.com");
+  await expect(page.locator(".cart-count")).toHaveText("1");
+  await expect(page.locator(".wishlist-count").first()).toHaveText("1");
+  await page.locator(".cart-button").click();
+  await expect(page.locator(".cart-items")).toContainText("Predator Elite FG");
+  await expect(page.locator(".cart-items")).not.toContainText("Phantom Control Pro");
+  await page.locator(".cart-drawer [data-close-cart]").click();
+  await page.locator('.header-actions button[aria-label="Wishlist"]').click();
+  await expect(page.locator(".wishlist-items")).toContainText("Predator Elite FG");
+  await expect(page.locator(".wishlist-items")).not.toContainText("Phantom Control Pro");
+
+  const stored = await page.evaluate(() => ({
+    userA: window.__attractionSupabaseTestState.cloudCarts["user-a-id"] || [],
+    userB: window.__attractionSupabaseTestState.cloudCarts["user-b-id"] || [],
+    wishA: window.__attractionSupabaseTestState.cloudWishlists["user-a-id"] || [],
+    wishB: window.__attractionSupabaseTestState.cloudWishlists["user-b-id"] || [],
+    localUserCart: localStorage.getItem("attractionCart:user-a-id"),
+    localUserWishlist: localStorage.getItem("attractionWishlist:user-a-id"),
+  }));
+  expect(stored.userA.map((item) => item.product_id)).toEqual(["predator-elite-fg"]);
+  expect(stored.userB.map((item) => item.product_id)).toEqual(["phantom-control-pro"]);
+  expect(stored.wishA).toEqual(["predator-elite-fg"]);
+  expect(stored.wishB).toEqual(["phantom-control-pro"]);
+  expect(stored.localUserCart).toBeNull();
+  expect(stored.localUserWishlist).toBeNull();
+});
+
+test("guest cart and wishlist merge once into the logged-in user with capped quantities", async ({ page }) => {
+  const userA = {
+    id: "merge-user-a",
+    email: "merge-a@example.com",
+    user_metadata: { full_name: "Merge User", phone: "+91 90000 00003" },
+  };
+  await installSupabaseStub(page, { user: null, usersByEmail: { "merge-a@example.com": userA } });
+  await page.evaluate(() => {
+    const product = {
+      id: "predator-elite-fg",
+      name: "Predator Elite FG",
+      category: "Football Shoes",
+      price: 219.99,
+      image: "assets/shoe-retro-leather.avif",
+    };
+    localStorage.setItem("attractionCart:guest", JSON.stringify([{ ...product, qty: 5 }]));
+    localStorage.setItem("attractionCart:merge-user-a", JSON.stringify([{ ...product, qty: 19 }]));
+    localStorage.setItem("attractionWishlist:guest", JSON.stringify([product]));
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(".cart-count")).toHaveText("5");
+
+  await loginAs(page, "merge-a@example.com");
+  await expect(page.locator(".cart-count")).toHaveText("20");
+  await expect(page.locator(".wishlist-count").first()).toHaveText("1");
+  expect(await page.evaluate(() => localStorage.getItem("attractionCart:guest"))).toBeNull();
+  expect(await page.evaluate(() => localStorage.getItem("attractionWishlist:guest"))).toBeNull();
+
+  await logoutCurrentUser(page);
+  await expect(page.locator(".cart-count")).toHaveText("0");
+  await expect(page.locator(".wishlist-count").first()).toHaveText("0");
+  await loginAs(page, "merge-a@example.com");
+  await expect(page.locator(".cart-count")).toHaveText("20");
+  const userCart = await page.evaluate(() => window.__attractionSupabaseTestState.cloudCarts["merge-user-a"] || []);
+  expect(userCart).toHaveLength(1);
+  expect(userCart[0].quantity).toBe(20);
+  expect(await page.evaluate(() => localStorage.getItem("attractionCart:merge-user-a"))).toBeNull();
+});
+
+test("legacy shared cart and wishlist migrate once to the resolved guest owner", async ({ page }) => {
+  await installSupabaseStub(page, { user: null });
+  await page.evaluate(() => {
+    const product = {
+      id: "predator-elite-fg",
+      name: "Predator Elite FG",
+      category: "Football Shoes",
+      price: 219.99,
+      image: "assets/shoe-retro-leather.avif",
+      qty: 2,
+    };
+    localStorage.setItem("attraction_cart_v1", JSON.stringify([product]));
+    localStorage.setItem("attraction_wishlist_v1", JSON.stringify([product]));
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await expect(page.locator(".cart-count")).toHaveText("2");
+  await expect(page.locator(".wishlist-count").first()).toHaveText("1");
+  const migration = await page.evaluate(() => ({
+    oldCart: localStorage.getItem("attraction_cart_v1"),
+    oldWishlist: localStorage.getItem("attraction_wishlist_v1"),
+    guestCart: JSON.parse(localStorage.getItem("attractionCart:guest") || "[]"),
+    guestWishlist: JSON.parse(localStorage.getItem("attractionWishlist:guest") || "[]"),
+  }));
+  expect(migration.oldCart).toBeNull();
+  expect(migration.oldWishlist).toBeNull();
+  expect(migration.guestCart[0].qty).toBe(2);
+  expect(migration.guestWishlist).toHaveLength(1);
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator(".cart-count")).toHaveText("2");
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("attractionCart:guest") || "[]"))).toHaveLength(1);
+});
+
+test("legacy shared cart and wishlist migrate once to the resolved authenticated owner", async ({ page }) => {
+  const user = {
+    id: "legacy-user-a",
+    email: "legacy@example.com",
+    user_metadata: { full_name: "Legacy User", phone: "+91 90000 00005" },
+  };
+  await installSupabaseStub(page, { user });
+  await page.evaluate(() => {
+    const product = {
+      id: "predator-elite-fg",
+      name: "Predator Elite FG",
+      category: "Football Shoes",
+      price: 219.99,
+      image: "assets/shoe-retro-leather.avif",
+      qty: 3,
+    };
+    localStorage.setItem("attraction_cart_v1", JSON.stringify([product]));
+    localStorage.setItem("attraction_wishlist_v1", JSON.stringify([product]));
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await expect(page.locator(".cart-count")).toHaveText("3");
+  await expect(page.locator(".wishlist-count").first()).toHaveText("1");
+  const migration = await page.evaluate(() => ({
+    oldCart: localStorage.getItem("attraction_cart_v1"),
+    oldWishlist: localStorage.getItem("attraction_wishlist_v1"),
+    userCart: window.__attractionSupabaseTestState.cloudCarts["legacy-user-a"] || [],
+    userWishlist: window.__attractionSupabaseTestState.cloudWishlists["legacy-user-a"] || [],
+    localUserCart: localStorage.getItem("attractionCart:legacy-user-a"),
+    localUserWishlist: localStorage.getItem("attractionWishlist:legacy-user-a"),
+    guestCart: localStorage.getItem("attractionCart:guest"),
+  }));
+  expect(migration.oldCart).toBeNull();
+  expect(migration.oldWishlist).toBeNull();
+  expect(migration.userCart[0].quantity).toBe(3);
+  expect(migration.userWishlist).toHaveLength(1);
+  expect(migration.localUserCart).toBeNull();
+  expect(migration.localUserWishlist).toBeNull();
+  expect(migration.guestCart).toBeNull();
+});
+
+test("cart stays empty until the authenticated session owner is resolved", async ({ page }) => {
+  const userA = {
+    id: "delayed-user-a",
+    email: "delayed@example.com",
+    user_metadata: { full_name: "Delayed User", phone: "+91 90000 00004" },
+  };
+  await installSupabaseStub(page, { user: userA, sessionDelay: 250 });
+  await page.evaluate(() => {
+    const base = {
+      name: "Stored Product",
+      category: "Football Shoes",
+      price: 100,
+      image: "",
+    };
+    localStorage.setItem("attractionCart:delayed-user-a", JSON.stringify([{ ...base, id: "user-a-product", qty: 1 }]));
+    localStorage.setItem("attractionCart:other-user", JSON.stringify([{ ...base, id: "wrong-product", qty: 7 }]));
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  await expect(page.locator(".cart-count")).toHaveText("0");
+  await page.waitForTimeout(80);
+  await expect(page.locator(".cart-count")).toHaveText("0");
+  await expect(page.locator(".cart-count")).toHaveText("1", { timeout: 1500 });
+});
+
+test("same authenticated user sees cloud cart and wishlist changes across browser contexts", async ({ browser }) => {
+  const cloud = createSharedCloudState();
+  const user = {
+    id: "cross-device-user",
+    email: "cross-device@example.com",
+    user_metadata: { full_name: "Cross Device User", phone: "+91 90000 00006" },
+  };
+  const contextOptions = {
+    baseURL: "http://127.0.0.1:4173",
+    viewport: { width: 390, height: 844 },
+    isMobile: true,
+    hasTouch: true,
+  };
+  const contextA = await browser.newContext(contextOptions);
+  const contextB = await browser.newContext(contextOptions);
+
+  try {
+    const pageA = await contextA.newPage();
+    await installSharedCloudSupabaseStub(pageA, cloud, user);
+    await pageA.goto("/", { waitUntil: "domcontentloaded" });
+    await pageA.locator(".product-card").first().getByRole("button", { name: "Add to Cart" }).click();
+    await pageA.locator(".product-card").first().locator(".wish").click();
+    await expect(pageA.locator(".cart-count")).toHaveText("1");
+    await expect(pageA.locator(".wishlist-count").first()).toHaveText("1");
+
+    const pageB = await contextB.newPage();
+    await installSharedCloudSupabaseStub(pageB, cloud, user);
+    await pageB.goto("/", { waitUntil: "domcontentloaded" });
+    await expect(pageB.locator(".cart-count")).toHaveText("1");
+    await expect(pageB.locator(".wishlist-count").first()).toHaveText("1");
+
+    await pageB.locator(".cart-button").click();
+    await pageB.locator('[data-cart-change="1"]').click();
+    await expect(pageB.locator(".cart-count")).toHaveText("2");
+
+    await pageA.reload({ waitUntil: "domcontentloaded" });
+    await expect(pageA.locator(".cart-count")).toHaveText("2");
+    await expect(pageA.locator(".wishlist-count").first()).toHaveText("1");
+    expect(cloud.carts.get(user.id)).toEqual([{ product_id: "predator-elite-fg", quantity: 2 }]);
+    expect(cloud.wishlists.get(user.id)).toEqual(["predator-elite-fg"]);
+
+    const localStorageState = await Promise.all([pageA, pageB].map((target) => target.evaluate((userId) => ({
+      cart: localStorage.getItem(`attractionCart:${userId}`),
+      wishlist: localStorage.getItem(`attractionWishlist:${userId}`),
+    }), user.id)));
+    expect(localStorageState).toEqual([
+      { cart: null, wishlist: null },
+      { cart: null, wishlist: null },
+    ]);
+  } finally {
+    await contextA.close();
+    await contextB.close();
+  }
+});
+
+test("failed cloud cart mutation preserves the visible cart", async ({ page }) => {
+  const user = {
+    id: "cart-failure-user",
+    email: "cart-failure@example.com",
+    user_metadata: { full_name: "Cart Failure User" },
+  };
+  await installSupabaseStub(page, {
+    user,
+    failCartRpc: "set_cart_item",
+    cloudCarts: {
+      [user.id]: [{ product_id: "predator-elite-fg", quantity: 1 }],
+    },
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(".cart-count")).toHaveText("1");
+
+  await page.locator(".product-card").first().getByRole("button", { name: "Add to Cart" }).click();
+  await expect(page.locator(".toast")).toContainText("We could not sync your cart");
+  await expect(page.locator(".cart-count")).toHaveText("1");
+  const cloudCart = await page.evaluate(() => window.__attractionSupabaseTestState.cloudCarts["cart-failure-user"]);
+  expect(cloudCart).toEqual([{ product_id: "predator-elite-fg", quantity: 1 }]);
+});
+
+test("guest cart migration reuses its token after failure and merges once", async ({ page }) => {
+  const user = {
+    id: "migration-retry-user",
+    email: "migration-retry@example.com",
+    user_metadata: { full_name: "Migration Retry User" },
+  };
+  await installSupabaseStub(page, {
+    user: null,
+    usersByEmail: { [user.email]: user },
+    failCartMergeAttempts: 1,
+  });
+  await page.evaluate(() => {
+    localStorage.setItem("attractionCart:guest", JSON.stringify([{
+      id: "predator-elite-fg",
+      name: "Predator Elite FG",
+      category: "Football Shoes",
+      price: 219.99,
+      image: "assets/shoe-retro-leather.avif",
+      qty: 2,
+    }]));
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await loginAs(page, user.email);
+  await expect(page.locator(".cart-count")).toHaveText("0");
+  const firstToken = await page.evaluate(() => JSON.parse(
+    localStorage.getItem("attractionCartMergeToken:migration-retry-user:guest")
+  ));
+  expect(firstToken).toMatch(/^[0-9a-f-]{36}$/i);
+  expect(await page.evaluate(() => localStorage.getItem("attractionCart:guest"))).not.toBeNull();
+
+  await logoutCurrentUser(page);
+  await expect(page.locator(".cart-count")).toHaveText("2");
+  await loginAs(page, user.email);
+  await expect(page.locator(".cart-count")).toHaveText("2");
+
+  const result = await page.evaluate(() => ({
+    calls: window.__attractionSupabaseTestState.rpcs.filter((call) => call.name === "merge_guest_cart"),
+    cloudCart: window.__attractionSupabaseTestState.cloudCarts["migration-retry-user"],
+    guestCart: localStorage.getItem("attractionCart:guest"),
+    token: localStorage.getItem("attractionCartMergeToken:migration-retry-user:guest"),
+  }));
+  expect(result.calls).toHaveLength(2);
+  expect(result.calls[0].payload.p_merge_token).toBe(firstToken);
+  expect(result.calls[1].payload.p_merge_token).toBe(firstToken);
+  expect(result.cloudCart).toEqual([{ product_id: "predator-elite-fg", quantity: 2 }]);
+  expect(result.guestCart).toBeNull();
+  expect(result.token).toBeNull();
+});
+
+test("logout replaces authenticated cloud collections with guest-only storage", async ({ page }) => {
+  const user = {
+    id: "logout-owner-user",
+    email: "logout-owner@example.com",
+    user_metadata: { full_name: "Logout Owner" },
+  };
+  await installSupabaseStub(page, {
+    user,
+    cloudCarts: {
+      [user.id]: [{ product_id: "predator-elite-fg", quantity: 1 }],
+    },
+    cloudWishlists: {
+      [user.id]: ["predator-elite-fg"],
+    },
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(".cart-count")).toHaveText("1");
+  await expect(page.locator(".wishlist-count").first()).toHaveText("1");
+  await page.evaluate(() => {
+    const guest = {
+      id: "phantom-control-pro",
+      name: "Phantom Control Pro",
+      category: "Football Shoes",
+      price: 199.99,
+      image: "assets/shoe-honeycomb-control.avif",
+    };
+    localStorage.setItem("attractionCart:guest", JSON.stringify([{ ...guest, qty: 3 }]));
+    localStorage.setItem("attractionWishlist:guest", JSON.stringify([guest]));
+  });
+
+  await logoutCurrentUser(page);
+  await expect(page.locator(".cart-count")).toHaveText("3");
+  await expect(page.locator(".wishlist-count").first()).toHaveText("1");
+  await page.locator(".cart-button").click();
+  await expect(page.locator(".cart-items")).toContainText("Phantom Control Pro");
+  await expect(page.locator(".cart-items")).not.toContainText("Predator Elite FG");
+  expect(await page.evaluate(() => window.__attractionSupabaseTestState.cloudCarts["logout-owner-user"])).toEqual([
+    { product_id: "predator-elite-fg", quantity: 1 },
+  ]);
+});
+
 test("checkout requires login before placing an order", async ({ page }) => {
   await installSupabaseStub(page, { user: null });
   await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -1402,8 +2074,21 @@ test("checkout uses place_order RPC with server-authoritative fields and total",
       email: "buyer@example.com",
       user_metadata: { full_name: "Buyer Two", phone: "+91 98765 43210" },
     },
+    cloudCarts: {
+      "unrelated-cloud-user": [{ product_id: "phantom-control-pro", quantity: 3 }],
+    },
   });
   await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.evaluate(() => {
+    localStorage.setItem("attractionCart:unrelated-user", JSON.stringify([{
+      id: "other-user-product",
+      name: "Other User Product",
+      category: "Footballs",
+      price: 59.99,
+      image: "",
+      qty: 3,
+    }]));
+  });
 
   await openCheckoutWithProduct(page);
 
@@ -1443,7 +2128,12 @@ test("checkout uses place_order RPC with server-authoritative fields and total",
   expect(payload.p_items[0]).not.toHaveProperty("product_category");
   expect(payload.p_items[0]).not.toHaveProperty("product_image");
   expect(state.inserts).toEqual([]);
-  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("attraction_cart_v1") || "[]"))).toEqual([]);
+  expect(await page.evaluate(() => window.__attractionSupabaseTestState.cloudCarts["user-checkout-2"] || [])).toEqual([]);
+  expect(await page.evaluate(() => window.__attractionSupabaseTestState.cloudCarts["unrelated-cloud-user"] || [])).toEqual([
+    { product_id: "phantom-control-pro", quantity: 3 },
+  ]);
+  expect(await page.evaluate(() => localStorage.getItem("attractionCart:user-checkout-2"))).toBeNull();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("attractionCart:unrelated-user") || "[]"))).toHaveLength(1);
 });
 
 test("failed order creation keeps cart contents", async ({ page }) => {
@@ -1470,7 +2160,8 @@ test("failed order creation keeps cart contents", async ({ page }) => {
   await expect(page.locator(".checkout-modal").getByText("We could not place your order. Please try again.")).toBeVisible();
   await expect(page.locator(".checkout-modal")).not.toContainText("public.orders");
   await expect(page.locator(".cart-count")).toHaveText("1");
-  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("attraction_cart_v1") || "[]").length)).toBe(1);
+  expect(await page.evaluate(() => (window.__attractionSupabaseTestState.cloudCarts["user-checkout-3"] || []).length)).toBe(1);
+  expect(await page.evaluate(() => localStorage.getItem("attractionCart:user-checkout-3"))).toBeNull();
 });
 
 test("checkout safely reports unavailable products and keeps the cart", async ({ page }) => {
@@ -1626,6 +2317,17 @@ test("order writes are RPC-only in the frontend source", async () => {
   expect(source).not.toMatch(/\.from\(["']orders["']\)\s*\.update\s*\(/s);
 });
 
+test("authenticated cart and wishlist are never persisted to localStorage", async () => {
+  const source = fs.readFileSync(path.join(process.cwd(), "script.js"), "utf8");
+
+  expect(source).toContain('writeStorage(getCartStorageKey(null), cart)');
+  expect(source).toContain('writeStorage(getWishlistStorageKey(null), wishlist)');
+  expect(source).not.toContain('writeStorage(getCartStorageKey(authUser)');
+  expect(source).not.toContain('writeStorage(getWishlistStorageKey(authUser)');
+  expect(source).toContain('"set_cart_item"');
+  expect(source).toContain('"set_wishlist_item"');
+});
+
 
 test("account modal switches between login and register with frontend validation", async ({ page }) => {
   await page.addInitScript(() => {
@@ -1645,7 +2347,11 @@ test("account modal switches between login and register with frontend validation
             return { data: { user: null, session: null }, error: { message: "Invalid login credentials" } };
           }
 
-          currentUser = { email, user_metadata: { full_name: "Demo Player", phone: "+91 98765 43210" } };
+          currentUser = {
+            id: "demo-player-id",
+            email,
+            user_metadata: { full_name: "Demo Player", phone: "+91 98765 43210" },
+          };
           notify();
           return { data: { user: currentUser, session: { user: currentUser } }, error: null };
         },

@@ -10,11 +10,18 @@
   const $$ = (selector, parent = document) => [...parent.querySelectorAll(selector)];
 
   const STORAGE_KEYS = {
-    cart: "attraction_cart_v1",
-    wishlist: "attraction_wishlist_v1",
+    cart: "attractionCart",
+    wishlist: "attractionWishlist",
+    cartMergeToken: "attractionCartMergeToken",
     cookieConsent: "attractionCookieConsent",
     cookiePreferences: "attractionCookiePreferences",
   };
+  const LEGACY_STORAGE_KEYS = {
+    cart: "attraction_cart_v1",
+    wishlist: "attraction_wishlist_v1",
+  };
+  const GUEST_STORAGE_ID = "guest";
+  const MAX_CART_QUANTITY = 20;
 
   const SUPABASE_URL = "https://jvpejotupbiagwqqzzha.supabase.co";
   const SUPABASE_ANON_KEY = "sb_publishable_bax_rqRGPvefYdHe9hpvYw_LVKcuj5I";
@@ -36,12 +43,32 @@
   const writeStorage = (key, value) => {
     try {
       localStorage.setItem(key, JSON.stringify(value));
+      return true;
     } catch (error) {
       console.warn("Storage unavailable", error);
+      return false;
     }
   };
 
-  let cart = readStorage(STORAGE_KEYS.cart, []);
+  const removeStorage = (key) => {
+    try {
+      localStorage.removeItem(key);
+      return true;
+    } catch (error) {
+      console.warn("Storage unavailable", error);
+      return false;
+    }
+  };
+
+  const hasStorageKey = (key) => {
+    try {
+      return localStorage.getItem(key) !== null;
+    } catch (error) {
+      return false;
+    }
+  };
+
+  let cart = [];
   let wishlist = [];
   let productLookup = new Map();
   let activeCategory = "All";
@@ -50,6 +77,12 @@
   let authUser = null;
   let authReady = !supabaseClient;
   let authSessionPromise = Promise.resolve();
+  let collectionOwnerId = null;
+  let collectionLoadVersion = 0;
+  let collectionSyncOwnerId = null;
+  let collectionSyncPromise = null;
+  let cartMutationQueue = Promise.resolve();
+  let wishlistMutationQueue = Promise.resolve();
 
   const productCards = $$(".product-card");
   const cartButton = $(".cart-button");
@@ -95,9 +128,57 @@
     return { id, name, category, price, image };
   }
 
+  function getStorageOwnerId(user = authUser) {
+    return user?.id || GUEST_STORAGE_ID;
+  }
+
+  function getCartStorageKey(user = authUser) {
+    return `${STORAGE_KEYS.cart}:${getStorageOwnerId(user)}`;
+  }
+
   function getWishlistStorageKey(user = authUser) {
-    const userKey = user?.id || user?.email;
-    return userKey ? `${STORAGE_KEYS.wishlist}:${userKey}` : STORAGE_KEYS.wishlist;
+    return `${STORAGE_KEYS.wishlist}:${getStorageOwnerId(user)}`;
+  }
+
+  function getCartMergeTokenKey(userId, source) {
+    return `${STORAGE_KEYS.cartMergeToken}:${userId}:${source}`;
+  }
+
+  function normalizeCartItems(items) {
+    if (!Array.isArray(items)) return [];
+    const normalized = [];
+
+    items.forEach((rawItem) => {
+      if (!rawItem || typeof rawItem !== "object") return;
+      const id = rawItem.id || slugify(rawItem.name || "");
+      if (!id) return;
+
+      const product = productLookup.get(id) || {};
+      const quantity = Math.min(
+        MAX_CART_QUANTITY,
+        Math.max(1, Number.parseInt(rawItem.qty, 10) || 1)
+      );
+      const existing = normalized.find((item) => item.id === id);
+      if (existing) {
+        existing.qty = Math.min(MAX_CART_QUANTITY, existing.qty + quantity);
+        return;
+      }
+
+      normalized.push({
+        id,
+        name: rawItem.name || product.name || id.replace(/-/g, " "),
+        category: rawItem.category || product.category || "Product",
+        price: normalizePrice(rawItem.price ?? product.price ?? 0),
+        image: rawItem.image || product.image || "",
+        qty: quantity,
+      });
+    });
+
+    return normalized;
+  }
+
+  function mergeCartItems(primary, secondary) {
+    return normalizeCartItems([...normalizeCartItems(primary), ...normalizeCartItems(secondary)]);
   }
 
   function normalizeWishlistItems(items) {
@@ -130,24 +211,284 @@
     return normalizeWishlistItems([...primary, ...secondary]);
   }
 
-  function loadWishlistForCurrentUser({ mergeGuest = false } = {}) {
-    const storageKey = getWishlistStorageKey();
-    let nextWishlist = normalizeWishlistItems(readStorage(storageKey, []));
-
-    if (authUser && mergeGuest) {
-      const guestWishlist = normalizeWishlistItems(readStorage(STORAGE_KEYS.wishlist, []));
-      nextWishlist = mergeWishlistItems(nextWishlist, guestWishlist);
-      writeStorage(storageKey, nextWishlist);
+  function migrateLegacyStorageToGuest() {
+    const cartStorageKey = getCartStorageKey(null);
+    const legacyCart = normalizeCartItems(readStorage(LEGACY_STORAGE_KEYS.cart, []));
+    if (legacyCart.length) {
+      const migratedCart = mergeCartItems(readStorage(cartStorageKey, []), legacyCart);
+      if (writeStorage(cartStorageKey, migratedCart)) removeStorage(LEGACY_STORAGE_KEYS.cart);
+    } else if (hasStorageKey(LEGACY_STORAGE_KEYS.cart)) {
+      removeStorage(LEGACY_STORAGE_KEYS.cart);
     }
 
-    wishlist = nextWishlist;
+    const wishlistStorageKey = getWishlistStorageKey(null);
+    const legacyWishlistKeys = [LEGACY_STORAGE_KEYS.wishlist];
+
+    legacyWishlistKeys.forEach((legacyKey) => {
+      const legacyWishlist = normalizeWishlistItems(readStorage(legacyKey, []));
+      if (legacyWishlist.length) {
+        const migratedWishlist = mergeWishlistItems(readStorage(wishlistStorageKey, []), legacyWishlist);
+        if (writeStorage(wishlistStorageKey, migratedWishlist)) removeStorage(legacyKey);
+      } else if (hasStorageKey(legacyKey)) {
+        removeStorage(legacyKey);
+      }
+    });
+  }
+
+  function refreshCollectionUI() {
+    updateCartCount();
+    renderCartItems();
     updateWishlistUI();
   }
 
-  function saveWishlist() {
+  function saveGuestCart() {
+    if (authUser?.id) {
+      console.error("Refused to store an authenticated cart in localStorage.");
+      return false;
+    }
+    cart = normalizeCartItems(cart);
+    const saved = writeStorage(getCartStorageKey(null), cart);
+    updateCartCount();
+    renderCartItems();
+    return saved;
+  }
+
+  function saveGuestWishlist() {
+    if (authUser?.id) {
+      console.error("Refused to store an authenticated wishlist in localStorage.");
+      return false;
+    }
     wishlist = normalizeWishlistItems(wishlist);
-    writeStorage(getWishlistStorageKey(), wishlist);
+    const saved = writeStorage(getWishlistStorageKey(null), wishlist);
     updateWishlistUI();
+    return saved;
+  }
+
+  function getJoinedProduct(row) {
+    const joined = row?.products;
+    return Array.isArray(joined) ? joined[0] : joined;
+  }
+
+  function normalizeCloudCartRows(rows) {
+    if (!Array.isArray(rows)) return [];
+    return normalizeCartItems(rows.flatMap((row) => {
+      const product = getJoinedProduct(row);
+      if (!product?.id || product.is_active === false) return [];
+      return [{
+        id: product.id,
+        name: product.name,
+        category: product.category,
+        price: product.price,
+        image: product.image,
+        qty: row.quantity,
+      }];
+    }));
+  }
+
+  function normalizeCloudWishlistRows(rows) {
+    if (!Array.isArray(rows)) return [];
+    return normalizeWishlistItems(rows.flatMap((row) => {
+      const product = getJoinedProduct(row);
+      if (!product?.id || product.is_active === false) return [];
+      return [{
+        id: product.id,
+        name: product.name,
+        category: product.category,
+        price: product.price,
+        image: product.image,
+      }];
+    }));
+  }
+
+  function showSyncError(collection, error) {
+    console.error(`${collection} synchronization failed`, error);
+    showToast(`We could not sync your ${collection.toLowerCase()}. Please try again.`);
+  }
+
+  async function loadCloudCart(expectedUserId, { showError = true } = {}) {
+    if (!supabaseClient || !expectedUserId) return false;
+
+    try {
+      const { data, error } = await supabaseClient
+        .from("cart_items")
+        .select("product_id,quantity,created_at,products!inner(id,name,category,price,image,is_active)")
+        .eq("user_id", expectedUserId)
+        .eq("products.is_active", true)
+        .order("created_at", { ascending: true });
+      if (error) throw error;
+      if (authUser?.id !== expectedUserId || collectionOwnerId !== expectedUserId) return false;
+
+      cart = normalizeCloudCartRows(data);
+      updateCartCount();
+      renderCartItems();
+      return true;
+    } catch (error) {
+      if (showError && authUser?.id === expectedUserId) showSyncError("Cart", error);
+      else console.error("Cart synchronization failed", error);
+      return false;
+    }
+  }
+
+  async function loadCloudWishlist(expectedUserId, { showError = true } = {}) {
+    if (!supabaseClient || !expectedUserId) return false;
+
+    try {
+      const { data, error } = await supabaseClient
+        .from("wishlist_items")
+        .select("product_id,created_at,products!inner(id,name,category,price,image,is_active)")
+        .eq("user_id", expectedUserId)
+        .eq("products.is_active", true)
+        .order("created_at", { ascending: true });
+      if (error) throw error;
+      if (authUser?.id !== expectedUserId || collectionOwnerId !== expectedUserId) return false;
+
+      wishlist = normalizeCloudWishlistRows(data);
+      updateWishlistUI();
+      return true;
+    } catch (error) {
+      if (showError && authUser?.id === expectedUserId) showSyncError("Wishlist", error);
+      else console.error("Wishlist synchronization failed", error);
+      return false;
+    }
+  }
+
+  async function migrateCartStorageKey(userId, storageKey, source) {
+    const items = normalizeCartItems(readStorage(storageKey, []));
+    const tokenKey = getCartMergeTokenKey(userId, source);
+    if (!items.length) {
+      if (hasStorageKey(storageKey)) removeStorage(storageKey);
+      removeStorage(tokenKey);
+      return true;
+    }
+
+    let mergeToken = readStorage(tokenKey, null);
+    if (!mergeToken) {
+      mergeToken = crypto.randomUUID();
+      if (!writeStorage(tokenKey, mergeToken)) {
+        console.error("Cart migration token could not be persisted", { storageKey, userId });
+        return false;
+      }
+    }
+
+    const payload = {
+      p_items: items.map((item) => ({ product_id: item.id, quantity: item.qty })),
+      p_merge_token: mergeToken,
+    };
+    const { error } = await supabaseClient.rpc("merge_guest_cart", payload);
+    if (error) {
+      console.error("Cart migration RPC failed", { error, storageKey, userId });
+      return false;
+    }
+
+    removeStorage(storageKey);
+    removeStorage(tokenKey);
+    return true;
+  }
+
+  async function migrateWishlistStorageKey(userId, storageKey) {
+    const items = normalizeWishlistItems(readStorage(storageKey, []));
+    if (!items.length) {
+      if (hasStorageKey(storageKey)) removeStorage(storageKey);
+      return true;
+    }
+
+    const { error } = await supabaseClient.rpc("merge_guest_wishlist", {
+      p_items: items.map((item) => ({ product_id: item.id })),
+    });
+    if (error) {
+      console.error("Wishlist migration RPC failed", { error, storageKey, userId });
+      return false;
+    }
+
+    removeStorage(storageKey);
+    return true;
+  }
+
+  async function migrateLocalCollectionsToCloud(user) {
+    if (!supabaseClient || !user?.id) return false;
+
+    const cartResults = [];
+    cartResults.push(await migrateCartStorageKey(user.id, getCartStorageKey(user), "user"));
+    cartResults.push(await migrateCartStorageKey(user.id, getCartStorageKey(null), "guest"));
+    cartResults.push(await migrateCartStorageKey(user.id, LEGACY_STORAGE_KEYS.cart, "legacy"));
+
+    const wishlistResults = [];
+    wishlistResults.push(await migrateWishlistStorageKey(user.id, getWishlistStorageKey(user)));
+    wishlistResults.push(await migrateWishlistStorageKey(user.id, getWishlistStorageKey(null)));
+    wishlistResults.push(await migrateWishlistStorageKey(user.id, LEGACY_STORAGE_KEYS.wishlist));
+    wishlistResults.push(await migrateWishlistStorageKey(
+      user.id,
+      `${LEGACY_STORAGE_KEYS.wishlist}:${user.id}`
+    ));
+
+    const migrated = [...cartResults, ...wishlistResults].every(Boolean);
+    if (!migrated && authUser?.id === user.id) {
+      showToast("Some saved items could not sync. They will be retried after your next login.");
+    }
+    return migrated;
+  }
+
+  function loadGuestCollections({ migrateLegacy = true } = {}) {
+    if (migrateLegacy) migrateLegacyStorageToGuest();
+    collectionOwnerId = GUEST_STORAGE_ID;
+    cart = normalizeCartItems(readStorage(getCartStorageKey(null), []));
+    wishlist = normalizeWishlistItems(readStorage(getWishlistStorageKey(null), []));
+    refreshCollectionUI();
+  }
+
+  async function activateCollectionOwner(user, { migrate = true } = {}) {
+    const expectedOwnerId = user?.id || GUEST_STORAGE_ID;
+    const version = ++collectionLoadVersion;
+    const ownerChanged = collectionOwnerId !== expectedOwnerId;
+    collectionOwnerId = expectedOwnerId;
+
+    if (ownerChanged) {
+      cart = [];
+      wishlist = [];
+      refreshCollectionUI();
+    }
+
+    if (!user?.id) {
+      if (version === collectionLoadVersion) loadGuestCollections({ migrateLegacy: migrate });
+      return true;
+    }
+
+    if (migrate) await migrateLocalCollectionsToCloud(user);
+    if (version !== collectionLoadVersion || authUser?.id !== user.id) return false;
+
+    const [cartLoaded, wishlistLoaded] = await Promise.all([
+      loadCloudCart(user.id),
+      loadCloudWishlist(user.id),
+    ]);
+    return cartLoaded && wishlistLoaded;
+  }
+
+  function synchronizeCollectionOwner(user, options = {}) {
+    const ownerId = user?.id || GUEST_STORAGE_ID;
+    if (collectionSyncPromise && collectionSyncOwnerId === ownerId) return collectionSyncPromise;
+
+    collectionSyncOwnerId = ownerId;
+    const pending = activateCollectionOwner(user, options);
+    const tracked = pending.finally(() => {
+      if (collectionSyncPromise === tracked) {
+        collectionSyncPromise = null;
+        collectionSyncOwnerId = null;
+      }
+    });
+    collectionSyncPromise = tracked;
+    return tracked;
+  }
+
+  function enqueueCartMutation(operation) {
+    const pending = cartMutationQueue.then(operation, operation);
+    cartMutationQueue = pending.catch(() => {});
+    return pending;
+  }
+
+  function enqueueWishlistMutation(operation) {
+    const pending = wishlistMutationQueue.then(operation, operation);
+    wishlistMutationQueue = pending.catch(() => {});
+    return pending;
   }
 
   function isWishlisted(id) {
@@ -1275,27 +1616,106 @@
     renderWishlistPage();
   }
 
-  function addToCart(product) {
-    const existing = cart.find((item) => item.id === product.id);
-    if (existing) {
-      existing.qty += 1;
-    } else {
-      cart.push({ ...product, qty: 1 });
-    }
-    writeStorage(STORAGE_KEYS.cart, cart);
-    updateCartCount();
-    updateWishlistUI();
-    renderCartItems();
-    showToast(`${product.name} added to cart`);
+  async function setAuthenticatedCartQuantity(userId, productId, quantity) {
+    const rpcName = quantity > 0 ? "set_cart_item" : "remove_cart_item";
+    const payload = quantity > 0
+      ? { p_product_id: productId, p_quantity: quantity }
+      : { p_product_id: productId };
+    const { error } = await supabaseClient.rpc(rpcName, payload);
+    if (error) throw error;
+    if (authUser?.id !== userId) return false;
+    return loadCloudCart(userId, { showError: false });
   }
 
-  function changeCartQuantity(id, change) {
-    cart = cart
-      .map((item) => (item.id === id ? { ...item, qty: item.qty + change } : item))
-      .filter((item) => item.qty > 0);
-    writeStorage(STORAGE_KEYS.cart, cart);
-    updateCartCount();
-    renderCartItems();
+  async function addToCart(product) {
+    await waitForAuthReady();
+    if (!authUser?.id) {
+      const existing = cart.find((item) => item.id === product.id);
+      if (existing) existing.qty = Math.min(MAX_CART_QUANTITY, existing.qty + 1);
+      else cart.push({ ...product, qty: 1 });
+      saveGuestCart();
+      showToast(`${product.name} added to cart`);
+      return;
+    }
+
+    const userId = authUser.id;
+    return enqueueCartMutation(async () => {
+      const current = cart.find((item) => item.id === product.id);
+      const quantity = Math.min(MAX_CART_QUANTITY, Number(current?.qty || 0) + 1);
+      try {
+        const reloaded = await setAuthenticatedCartQuantity(userId, product.id, quantity);
+        if (!reloaded && authUser?.id === userId) {
+          showSyncError("Cart", new Error("Cart changed but could not be reloaded."));
+          return;
+        }
+        if (authUser?.id === userId) showToast(`${product.name} added to cart`);
+      } catch (error) {
+        if (authUser?.id === userId) showSyncError("Cart", error);
+        else console.error("Cart mutation failed after account change", error);
+      }
+    });
+  }
+
+  async function changeCartQuantity(id, change) {
+    await waitForAuthReady();
+    const current = cart.find((item) => item.id === id);
+    if (!current) return;
+
+    if (!authUser?.id) {
+      const quantity = Math.min(MAX_CART_QUANTITY, current.qty + change);
+      cart = quantity > 0
+        ? cart.map((item) => (item.id === id ? { ...item, qty: quantity } : item))
+        : cart.filter((item) => item.id !== id);
+      saveGuestCart();
+      return;
+    }
+
+    const userId = authUser.id;
+    return enqueueCartMutation(async () => {
+      const latest = cart.find((item) => item.id === id);
+      if (!latest || authUser?.id !== userId) return;
+      const quantity = Math.min(MAX_CART_QUANTITY, latest.qty + change);
+      try {
+        const reloaded = await setAuthenticatedCartQuantity(userId, id, quantity);
+        if (!reloaded && authUser?.id === userId) {
+          showSyncError("Cart", new Error("Cart changed but could not be reloaded."));
+        }
+      } catch (error) {
+        if (authUser?.id === userId) showSyncError("Cart", error);
+        else console.error("Cart quantity mutation failed after account change", error);
+      }
+    });
+  }
+
+  async function clearCurrentCart() {
+    await waitForAuthReady();
+    if (!authUser?.id) {
+      cart = [];
+      saveGuestCart();
+      showToast("Cart cleared");
+      return;
+    }
+
+    const userId = authUser.id;
+    return enqueueCartMutation(async () => {
+      try {
+        const { error } = await supabaseClient.rpc("clear_cart");
+        if (error) throw error;
+        if (authUser?.id !== userId) return;
+        const reloaded = await loadCloudCart(userId, { showError: false });
+        if (!reloaded) {
+          cart = [];
+          updateCartCount();
+          renderCartItems();
+          showSyncError("Cart", new Error("Cleared cart could not be reloaded."));
+          return;
+        }
+        showToast("Cart cleared");
+      } catch (error) {
+        if (authUser?.id === userId) showSyncError("Cart", error);
+        else console.error("Clear cart failed after account change", error);
+      }
+    });
   }
 
   function getCartTotal() {
@@ -1534,6 +1954,8 @@
     }
 
     const formData = new FormData(form);
+    const checkoutUserId = authUser.id;
+    const checkoutCart = normalizeCartItems(cart);
     const checkoutToken = form.dataset.checkoutToken || crypto.randomUUID();
     form.dataset.checkoutToken = checkoutToken;
     const rpcPayload = {
@@ -1544,7 +1966,7 @@
       p_state: String(formData.get("state") || "").trim(),
       p_pin_code: String(formData.get("pin_code") || "").trim(),
       p_note: String(formData.get("note") || "").trim() || null,
-      p_items: cart.map((item) => ({
+      p_items: checkoutCart.map((item) => ({
         product_id: item.id,
         quantity: Number(item.qty || 1),
       })),
@@ -1560,17 +1982,36 @@
         throw new Error("The order response was incomplete.");
       }
 
-      cart = [];
-      writeStorage(STORAGE_KEYS.cart, cart);
-      updateCartCount();
-      renderCartItems();
+      let cartClearFailed = false;
+      if (authUser?.id === checkoutUserId) {
+        const { error: clearError } = await supabaseClient.rpc("clear_cart");
+        if (clearError) {
+          cartClearFailed = true;
+          console.error("Order succeeded but cloud cart clearing failed", clearError);
+        } else if (authUser?.id === checkoutUserId) {
+          cart = [];
+          updateCartCount();
+          renderCartItems();
+          const reloaded = await loadCloudCart(checkoutUserId, { showError: false });
+          if (!reloaded && authUser?.id === checkoutUserId) {
+            console.error("Order succeeded and cloud cart cleared, but cart reload failed");
+          }
+        } else {
+          console.info("Cloud cart cleared after checkout; visible collections belong to a different owner.");
+        }
+      } else {
+        cartClearFailed = true;
+        console.error("Order succeeded, but the active account changed before cart clearing.");
+      }
       const total = $("[data-checkout-total]", modal);
       if (total) total.textContent = money(order.total_amount);
       delete form.dataset.checkoutToken;
       showCheckoutMessage(
         modal,
         "success",
-        `Order placed successfully. Order ID: ${order.order_id}. Total: ${money(order.total_amount)}`
+        cartClearFailed
+          ? `Order placed successfully. Order ID: ${order.order_id}. Total: ${money(order.total_amount)}. Your cart could not be cleared automatically.`
+          : `Order placed successfully. Order ID: ${order.order_id}. Total: ${money(order.total_amount)}`
       );
       showToast("Order placed successfully");
       if (submitButton) submitButton.textContent = "Order Placed";
@@ -1606,11 +2047,7 @@
       const qtyButton = event.target.closest("[data-cart-change]");
       if (qtyButton) changeCartQuantity(qtyButton.dataset.id, Number(qtyButton.dataset.cartChange));
       if (event.target.matches("[data-clear-cart]")) {
-        cart = [];
-        writeStorage(STORAGE_KEYS.cart, cart);
-        updateCartCount();
-        renderCartItems();
-        showToast("Cart cleared");
+        clearCurrentCart();
       }
       if (event.target.matches("[data-checkout]")) {
         openCheckout();
@@ -1750,18 +2187,70 @@
     `;
   }
 
-  function toggleWishlist(product) {
-    const saved = isWishlisted(product.id);
-    wishlist = saved ? wishlist.filter((item) => item.id !== product.id) : [...wishlist, product];
-    saveWishlist();
-    showToast(saved ? "Removed from wishlist" : "Added to wishlist");
+  async function mutateAuthenticatedWishlist(userId, productId, shouldSave) {
+    const rpcName = shouldSave ? "set_wishlist_item" : "remove_wishlist_item";
+    const { error } = await supabaseClient.rpc(rpcName, { p_product_id: productId });
+    if (error) throw error;
+    if (authUser?.id !== userId) return false;
+    return loadCloudWishlist(userId, { showError: false });
   }
 
-  function removeWishlistItem(id) {
+  async function toggleWishlist(product) {
+    await waitForAuthReady();
+    const saved = isWishlisted(product.id);
+
+    if (!authUser?.id) {
+      wishlist = saved ? wishlist.filter((item) => item.id !== product.id) : [...wishlist, product];
+      saveGuestWishlist();
+      showToast(saved ? "Removed from wishlist" : "Added to wishlist");
+      return;
+    }
+
+    const userId = authUser.id;
+    return enqueueWishlistMutation(async () => {
+      const currentlySaved = isWishlisted(product.id);
+      try {
+        const reloaded = await mutateAuthenticatedWishlist(userId, product.id, !currentlySaved);
+        if (!reloaded && authUser?.id === userId) {
+          showSyncError("Wishlist", new Error("Wishlist changed but could not be reloaded."));
+          return;
+        }
+        if (authUser?.id === userId) {
+          showToast(currentlySaved ? "Removed from wishlist" : "Added to wishlist");
+        }
+      } catch (error) {
+        if (authUser?.id === userId) showSyncError("Wishlist", error);
+        else console.error("Wishlist mutation failed after account change", error);
+      }
+    });
+  }
+
+  async function removeWishlistItem(id) {
+    await waitForAuthReady();
     const item = wishlist.find((product) => product.id === id);
-    wishlist = wishlist.filter((product) => product.id !== id);
-    saveWishlist();
-    if (item) showToast("Removed from wishlist");
+    if (!item) return;
+
+    if (!authUser?.id) {
+      wishlist = wishlist.filter((product) => product.id !== id);
+      saveGuestWishlist();
+      showToast("Removed from wishlist");
+      return;
+    }
+
+    const userId = authUser.id;
+    return enqueueWishlistMutation(async () => {
+      try {
+        const reloaded = await mutateAuthenticatedWishlist(userId, id, false);
+        if (!reloaded && authUser?.id === userId) {
+          showSyncError("Wishlist", new Error("Wishlist changed but could not be reloaded."));
+          return;
+        }
+        if (authUser?.id === userId) showToast("Removed from wishlist");
+      } catch (error) {
+        if (authUser?.id === userId) showSyncError("Wishlist", error);
+        else console.error("Wishlist removal failed after account change", error);
+      }
+    });
   }
 
   function renderWishlistPage() {
@@ -2039,6 +2528,8 @@
 
   async function initSupabaseAuth() {
     if (!supabaseClient) {
+      authUser = null;
+      loadGuestCollections({ migrateLegacy: true });
       authReady = true;
       updateAuthUI();
       return;
@@ -2050,19 +2541,21 @@
       const { data, error } = await supabaseClient.auth.getSession();
       if (error) throw error;
       authUser = data?.session?.user || null;
-      loadWishlistForCurrentUser({ mergeGuest: Boolean(authUser) });
+      await synchronizeCollectionOwner(authUser, { migrate: true });
 
       supabaseClient.auth.onAuthStateChange((event, session) => {
-        authReady = true;
-        authUser = session?.user || null;
-        loadWishlistForCurrentUser({ mergeGuest: event === "SIGNED_IN" && Boolean(authUser) });
-        updateAuthUI();
-        refreshAdminPageAccess();
+        void (async () => {
+          authReady = true;
+          authUser = session?.user || null;
+          await synchronizeCollectionOwner(authUser, { migrate: true });
+          updateAuthUI();
+          refreshAdminPageAccess();
+        })();
       });
     } catch (error) {
       console.warn("Supabase auth session check failed", error);
       authUser = null;
-      loadWishlistForCurrentUser();
+      loadGuestCollections({ migrateLegacy: true });
     } finally {
       authReady = true;
       updateAuthUI();
@@ -2208,7 +2701,7 @@
         if (error) throw error;
 
         authUser = data?.user || data?.session?.user || null;
-        loadWishlistForCurrentUser({ mergeGuest: Boolean(authUser) });
+        await synchronizeCollectionOwner(authUser, { migrate: true });
         updateAuthUI();
         showToast("Logged in successfully");
         closeLogin();
@@ -2269,7 +2762,7 @@
         if (error) throw error;
 
         authUser = data?.session?.user || null;
-        loadWishlistForCurrentUser({ mergeGuest: Boolean(authUser) });
+        await synchronizeCollectionOwner(authUser, { migrate: true });
         updateAuthUI();
 
         if (data?.session) {
@@ -2297,6 +2790,7 @@
       if (error) throw error;
 
       authUser = null;
+      await synchronizeCollectionOwner(null, { migrate: true });
       updateAuthUI();
       closeLogin();
       showToast("Logged out successfully");
@@ -2672,7 +3166,6 @@
   function boot() {
     injectInteractionStyles();
     collectProducts();
-    loadWishlistForCurrentUser();
     createWishlistHeaderButton();
     createCartDrawer();
     createWishlistDrawer();
