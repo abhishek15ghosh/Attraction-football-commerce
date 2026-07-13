@@ -83,6 +83,8 @@
   let collectionSyncPromise = null;
   let cartMutationQueue = Promise.resolve();
   let wishlistMutationQueue = Promise.resolve();
+  let customerOrders = [];
+  let myOrdersLoadVersion = 0;
 
   const productCards = $$(".product-card");
   const cartButton = $(".cart-button");
@@ -99,6 +101,7 @@
 
   const money = (number) => `${Number(number).toFixed(2)}`;
   const ORDER_STATUSES = ["Pending", "Confirmed", "Shipped", "Delivered", "Cancelled"];
+  const PAYMENT_STATUSES = ["Unpaid", "Paid"];
 
   const slugify = (text) =>
     text
@@ -1260,6 +1263,14 @@
     });
   }
 
+  function getOrderPaymentMethod(value) {
+    return value === "COD" ? "Cash on Delivery" : "Not available";
+  }
+
+  function getOrderPaymentStatus(value) {
+    return PAYMENT_STATUSES.includes(value) ? value : "Unpaid";
+  }
+
   function renderAdminOrders(page, orders) {
     const container = $("[data-admin-orders]", page);
     const count = $("[data-admin-order-count]", page);
@@ -1279,6 +1290,13 @@
         const statusOptions = ORDER_STATUSES.map(
           (option) => `<option value="${option}" ${option === status ? "selected" : ""}>${option}</option>`
         ).join("");
+        const paymentStatus = getOrderPaymentStatus(order.payment_status);
+        const paymentStatusOptions = PAYMENT_STATUSES.map(
+          (option) => `<option value="${option}" ${option === paymentStatus ? "selected" : ""}>${option}</option>`
+        ).join("");
+        const paymentCollectedAt = order.payment_collected_at
+          ? formatOrderDate(order.payment_collected_at)
+          : "";
         const itemsHtml = items
           .map((item) => {
             const price = Number(item.product_price || 0);
@@ -1305,12 +1323,21 @@
                 <h3>${escapeHTML(order.id)}</h3>
                 <p>${formatOrderDate(order.created_at)}</p>
               </div>
-              <div class="admin-status-control">
-                <label for="status-${escapeHTML(order.id)}">Status</label>
-                <select id="status-${escapeHTML(order.id)}" data-admin-status>
-                  ${statusOptions}
-                </select>
-                <button type="button" data-admin-status-save>Save Status</button>
+              <div class="admin-order-controls">
+                <div class="admin-status-control">
+                  <label for="status-${escapeHTML(order.id)}">Order Status</label>
+                  <select id="status-${escapeHTML(order.id)}" data-admin-status>
+                    ${statusOptions}
+                  </select>
+                  <button type="button" data-admin-status-save>Save Status</button>
+                </div>
+                <div class="admin-status-control admin-payment-status-control">
+                  <label for="payment-status-${escapeHTML(order.id)}">Payment Status</label>
+                  <select id="payment-status-${escapeHTML(order.id)}" data-admin-payment-status>
+                    ${paymentStatusOptions}
+                  </select>
+                  <button type="button" data-admin-payment-status-save>Save Payment</button>
+                </div>
               </div>
             </div>
             <div class="admin-order-grid">
@@ -1329,6 +1356,9 @@
                 <span class="admin-kicker">Order Total</span>
                 <p class="admin-order-total">${money(order.total_amount || 0)}</p>
                 <p>Current status: <strong data-admin-current-status>${escapeHTML(status)}</strong></p>
+                <p>Payment Method: <strong>${escapeHTML(getOrderPaymentMethod(order.payment_method))}</strong></p>
+                <p>Payment Status: <strong data-admin-current-payment-status>${escapeHTML(paymentStatus)}</strong></p>
+                <p data-admin-payment-collected ${paymentCollectedAt ? "" : "hidden"}>Payment Collected At: <strong data-admin-payment-collected-value>${escapeHTML(paymentCollectedAt)}</strong></p>
               </div>
             </div>
             <div class="admin-items-wrap">
@@ -1387,6 +1417,40 @@
     button.textContent = "Save Status";
   }
 
+  async function updateAdminOrderPaymentStatus(page, button) {
+    const card = button.closest("[data-admin-order-card]");
+    const select = $("[data-admin-payment-status]", card);
+    const statusLabel = $("[data-admin-current-payment-status]", card);
+    const collectedRow = $("[data-admin-payment-collected]", card);
+    const collectedValue = $("[data-admin-payment-collected-value]", card);
+    const orderId = card?.dataset.orderId;
+    const paymentStatus = select?.value;
+    if (!orderId || !PAYMENT_STATUSES.includes(paymentStatus)) return;
+
+    button.disabled = true;
+    button.textContent = "Saving...";
+    hideAdminFeedback(page);
+    const { data, error } = await supabaseClient.rpc("update_order_payment_status", {
+      p_order_id: orderId,
+      p_payment_status: paymentStatus,
+    });
+    if (error) {
+      console.error("Order payment status RPC failed", error);
+      showAdminFeedback(page, "error", "Payment status could not be updated. Please try again.");
+    } else {
+      const updatedOrder = Array.isArray(data) ? data[0] : data;
+      const updatedStatus = getOrderPaymentStatus(updatedOrder?.payment_status || paymentStatus);
+      const paymentCollectedAt = updatedOrder?.payment_collected_at || null;
+      if (statusLabel) statusLabel.textContent = updatedStatus;
+      if (select) select.value = updatedStatus;
+      if (collectedRow) collectedRow.hidden = !paymentCollectedAt;
+      if (collectedValue) collectedValue.textContent = paymentCollectedAt ? formatOrderDate(paymentCollectedAt) : "";
+      showAdminFeedback(page, "success", `Order ${orderId} payment status updated to ${updatedStatus}.`);
+    }
+    button.disabled = false;
+    button.textContent = "Save Payment";
+  }
+
   async function checkAdminAccess(page) {
     if (!page || page.dataset.adminChecking === "true") return;
     page.dataset.adminChecking = "true";
@@ -1435,8 +1499,239 @@
       if (refreshButton) checkAdminAccess(page);
       const saveButton = event.target.closest("[data-admin-status-save]");
       if (saveButton) updateAdminOrderStatus(page, saveButton);
+      const paymentSaveButton = event.target.closest("[data-admin-payment-status-save]");
+      if (paymentSaveButton) updateAdminOrderPaymentStatus(page, paymentSaveButton);
     });
     checkAdminAccess(page);
+  }
+
+  function setMyOrdersView(page, state) {
+    const views = {
+      loading: $("[data-orders-loading]", page),
+      login: $("[data-orders-login]", page),
+      empty: $("[data-orders-empty]", page),
+      error: $("[data-orders-error]", page),
+      list: $("[data-orders-list]", page),
+    };
+
+    Object.values(views).forEach((view) => {
+      if (view) view.hidden = true;
+    });
+    if (views[state]) views[state].hidden = false;
+  }
+
+  function getCustomerOrderItems(order) {
+    return Array.isArray(order?.order_items) ? order.order_items : [];
+  }
+
+  function getCustomerOrderStatus(status) {
+    return ORDER_STATUSES.includes(status) ? status : "Pending";
+  }
+
+  function formatCustomerOrderMoney(value) {
+    return `$${money(value)}`;
+  }
+
+  function getCustomerOrderItemCount(order) {
+    return getCustomerOrderItems(order).reduce(
+      (count, item) => count + Math.max(1, Number(item.quantity) || 1),
+      0
+    );
+  }
+
+  function renderCustomerOrders(page) {
+    const list = $("[data-orders-list]", page);
+    if (!list) return;
+
+    list.innerHTML = customerOrders
+      .map((order) => {
+        const status = getCustomerOrderStatus(order.status);
+        const itemCount = getCustomerOrderItemCount(order);
+        const shortId = String(order.id || "").slice(0, 8).toUpperCase();
+        return `
+          <article class="customer-order-card" data-customer-order-id="${escapeHTML(order.id)}">
+            <span class="order-card-label customer-order-card__label customer-order-card__label--order">Order</span>
+            <span class="order-card-label customer-order-card__label customer-order-card__label--products">Products</span>
+            <span class="order-card-label customer-order-card__label customer-order-card__label--total">Total</span>
+            <span class="order-card-label customer-order-card__label customer-order-card__label--status">Status</span>
+            <span class="order-card-label customer-order-card__label customer-order-card__label--action">Action</span>
+            <h3 class="customer-order-card__primary customer-order-card__order-number">#${escapeHTML(shortId || "UNKNOWN")}</h3>
+            <strong class="customer-order-card__primary customer-order-card__metric customer-order-card__metric--products">${itemCount} ${itemCount === 1 ? "Product" : "Products"}</strong>
+            <strong class="customer-order-card__primary customer-order-card__metric customer-order-card__metric--total">${formatCustomerOrderMoney(order.total_amount || 0)}</strong>
+            <span class="customer-order-card__primary customer-order-card__status-value order-status order-status--${status.toLowerCase()}">${escapeHTML(status)}</span>
+            <button class="customer-order-card__primary customer-order-card__action-value customer-order-details-button" type="button" data-view-order-details>View Details</button>
+            <p class="customer-order-card__date">${escapeHTML(formatOrderDate(order.created_at))}</p>
+          </article>
+        `;
+      })
+      .join("");
+  }
+
+  function renderCustomerOrderDetails(order) {
+    const content = $("[data-order-details-content]");
+    if (!content || !order) return;
+
+    const status = getCustomerOrderStatus(order.status);
+    const address = [order.address, order.city, order.state, order.pin_code].filter(Boolean).join(", ");
+    const paymentMethod = getOrderPaymentMethod(order.payment_method);
+    const paymentStatus = getOrderPaymentStatus(order.payment_status);
+    const paymentCollectedAt = order.payment_collected_at
+      ? formatOrderDate(order.payment_collected_at)
+      : "";
+    const itemsHtml = getCustomerOrderItems(order)
+      .map((item) => {
+        const price = Number(item.product_price) || 0;
+        const quantity = Math.max(1, Number(item.quantity) || 1);
+        return `
+          <article class="customer-order-item">
+            <img src="${escapeHTML(item.product_image || "assets/hero-football-boot.avif")}" alt="${escapeHTML(item.product_name || "Ordered product")}" loading="lazy" decoding="async" />
+            <div class="customer-order-item__copy">
+              <strong>${escapeHTML(item.product_name || "Product")}</strong>
+              <span>${escapeHTML(item.product_category || "Product")}</span>
+              <small>${formatCustomerOrderMoney(price)} × ${quantity}</small>
+            </div>
+            <b>${formatCustomerOrderMoney(price * quantity)}</b>
+          </article>
+        `;
+      })
+      .join("");
+
+    content.innerHTML = `
+      <div class="order-details-topline">
+        <div>
+          <span class="order-card-label">Full Order ID</span>
+          <p class="order-details-id">${escapeHTML(order.id || "Not available")}</p>
+          <p>${escapeHTML(formatOrderDate(order.created_at))}</p>
+        </div>
+        <span class="order-status order-status--${status.toLowerCase()}">${escapeHTML(status)}</span>
+      </div>
+      <div class="order-details-grid">
+        <section>
+          <span class="order-card-label">Customer</span>
+          <p><strong>${escapeHTML(order.customer_name || "Not available")}</strong></p>
+          <p>${escapeHTML(order.customer_email || "Not available")}</p>
+          <p>${escapeHTML(order.customer_phone || "Not available")}</p>
+        </section>
+        <section>
+          <span class="order-card-label">Delivery Address</span>
+          <p>${escapeHTML(address || "Not available")}</p>
+          <p>${escapeHTML(order.note ? `Note: ${order.note}` : "No customer note")}</p>
+        </section>
+        <section class="order-details-payment">
+          <span class="order-card-label">Payment</span>
+          <p>Payment Method: <strong>${escapeHTML(paymentMethod)}</strong></p>
+          <p>Payment Status: <strong>${escapeHTML(paymentStatus)}</strong></p>
+          ${paymentCollectedAt ? `<p>Payment Collected At: <strong>${escapeHTML(paymentCollectedAt)}</strong></p>` : ""}
+        </section>
+      </div>
+      <section class="order-details-items" aria-label="Ordered products">
+        <span class="order-card-label">Ordered Products</span>
+        ${itemsHtml || "<p>No products were found for this order.</p>"}
+      </section>
+      <div class="order-details-total">
+        <span>Complete Order Total</span>
+        <strong>${formatCustomerOrderMoney(order.total_amount || 0)}</strong>
+      </div>
+    `;
+  }
+
+  function openCustomerOrderDetails(orderId) {
+    const order = customerOrders.find((entry) => String(entry.id) === String(orderId));
+    const modal = $("[data-order-details-modal]");
+    if (!order || !modal) return;
+
+    renderCustomerOrderDetails(order);
+    modal.classList.add("is-open");
+    modal.setAttribute("aria-hidden", "false");
+    document.body.classList.add("no-scroll");
+    window.setTimeout(() => $("[data-close-order-details]", modal)?.focus(), 40);
+  }
+
+  function closeCustomerOrderDetails() {
+    const modal = $("[data-order-details-modal]");
+    if (!modal?.classList.contains("is-open")) return;
+    modal.classList.remove("is-open");
+    modal.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("no-scroll");
+  }
+
+  function resetCustomerOrdersForAuthChange() {
+    myOrdersLoadVersion += 1;
+    customerOrders = [];
+    closeCustomerOrderDetails();
+    const page = $("[data-my-orders-page]");
+    const list = page && $("[data-orders-list]", page);
+    if (list) list.innerHTML = "";
+    if (page) setMyOrdersView(page, "loading");
+  }
+
+  async function loadCustomerOrders(page, userId) {
+    const requestVersion = ++myOrdersLoadVersion;
+    setMyOrdersView(page, "loading");
+
+    const { data, error } = await supabaseClient
+      .from("orders")
+      .select("id,user_id,customer_name,customer_email,customer_phone,address,city,state,pin_code,note,total_amount,status,payment_method,payment_status,payment_collected_at,created_at,order_items(id,order_id,product_id,product_name,product_category,product_price,quantity,product_image)")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (requestVersion !== myOrdersLoadVersion || authUser?.id !== userId) return;
+    if (error) {
+      console.error("Customer orders could not be loaded", error);
+      customerOrders = [];
+      setMyOrdersView(page, "error");
+      return;
+    }
+
+    customerOrders = Array.isArray(data)
+      ? [...data].sort((first, second) => new Date(second.created_at) - new Date(first.created_at))
+      : [];
+    renderCustomerOrders(page);
+    setMyOrdersView(page, customerOrders.length ? "list" : "empty");
+  }
+
+  async function refreshMyOrdersPageAccess() {
+    const page = $("[data-my-orders-page]");
+    if (!page || page.dataset.ordersBound !== "true") return;
+
+    const accessVersion = ++myOrdersLoadVersion;
+    customerOrders = [];
+    const list = $("[data-orders-list]", page);
+    if (list) list.innerHTML = "";
+    setMyOrdersView(page, "loading");
+    await waitForAuthReady();
+    if (accessVersion !== myOrdersLoadVersion) return;
+
+    if (!supabaseClient || !authUser) {
+      setMyOrdersView(page, "login");
+      return;
+    }
+
+    await loadCustomerOrders(page, authUser.id);
+  }
+
+  function initMyOrdersPage() {
+    const page = $("[data-my-orders-page]");
+    const modal = $("[data-order-details-modal]");
+    if (!page || page.dataset.ordersBound === "true") return;
+    page.dataset.ordersBound = "true";
+
+    page.addEventListener("click", (event) => {
+      if (event.target.closest("[data-orders-login-button]")) openLogin();
+      if (event.target.closest("[data-orders-retry]")) refreshMyOrdersPageAccess();
+
+      const detailsButton = event.target.closest("[data-view-order-details]");
+      const card = detailsButton?.closest("[data-customer-order-id]");
+      if (card) openCustomerOrderDetails(card.dataset.customerOrderId);
+    });
+
+    modal?.addEventListener("click", (event) => {
+      if (event.target === modal || event.target.closest("[data-close-order-details]")) {
+        closeCustomerOrderDetails();
+      }
+    });
+
+    refreshMyOrdersPageAccess();
   }
 
   function getCookieConsent() {
@@ -1769,9 +2064,77 @@
     }
   }
 
+  function formatCheckoutMoney(value) {
+    return `$${money(value)}`;
+  }
+
   function updateCheckoutSummary(modal) {
     const total = $("[data-checkout-total]", modal);
-    if (total) total.textContent = money(getCartTotal());
+    if (total) total.textContent = formatCheckoutMoney(getCartTotal());
+  }
+
+  function setCheckoutStep(modal, step) {
+    const form = $("[data-checkout-form]", modal);
+    const title = $("#checkout-title", modal);
+    const views = {
+      details: $("[data-checkout-details]", modal),
+      confirmation: $("[data-checkout-confirmation]", modal),
+      success: $("[data-checkout-success-panel]", modal),
+    };
+    Object.values(views).forEach((view) => {
+      if (view) view.hidden = true;
+    });
+    if (views[step]) views[step].hidden = false;
+    if (form) form.dataset.step = step;
+    if (title) {
+      title.textContent = step === "confirmation"
+        ? "Confirm Cash on Delivery"
+        : step === "success"
+          ? "Order Confirmed"
+          : "Checkout";
+    }
+  }
+
+  function renderCheckoutConfirmation(modal) {
+    const form = $("[data-checkout-form]", modal);
+    const items = $("[data-cod-confirmation-items]", modal);
+    if (!form || !items) return false;
+
+    const formData = new FormData(form);
+    const checkoutCart = normalizeCartItems(cart);
+    if (!checkoutCart.length) return false;
+
+    items.innerHTML = checkoutCart
+      .map((item) => `
+        <article class="checkout-confirmation-item">
+          <img src="${escapeHTML(item.image || "assets/hero-football-boot.avif")}" alt="${escapeHTML(item.name)}" loading="lazy" decoding="async" />
+          <div>
+            <strong>${escapeHTML(item.name)}</strong>
+            <span>${escapeHTML(item.category)}</span>
+            <small>Quantity: ${Number(item.qty || 1)}</small>
+          </div>
+          <b>${formatCheckoutMoney(Number(item.price || 0) * Number(item.qty || 1))}</b>
+        </article>
+      `)
+      .join("");
+
+    const address = [
+      String(formData.get("address") || "").trim(),
+      String(formData.get("city") || "").trim(),
+      String(formData.get("state") || "").trim(),
+      String(formData.get("pin_code") || "").trim(),
+    ].filter(Boolean).join(", ");
+    const phone = $("[data-cod-confirmation-phone]", modal);
+    const addressNode = $("[data-cod-confirmation-address]", modal);
+    const total = $("[data-cod-confirmation-total]", modal);
+    const payMessage = $("[data-cod-payment-message]", modal);
+    if (phone) phone.textContent = String(formData.get("customer_phone") || "").trim();
+    if (addressNode) addressNode.textContent = address;
+    if (total) total.textContent = formatCheckoutMoney(getCartTotal());
+    if (payMessage) {
+      payMessage.textContent = `You will pay ${formatCheckoutMoney(getCartTotal())} when the order is delivered.`;
+    }
+    return true;
   }
 
   function createCheckoutModal() {
@@ -1788,46 +2151,101 @@
           <button class="close-btn" type="button" data-close-checkout aria-label="Close checkout">×</button>
         </div>
         <form class="checkout-form" data-checkout-form novalidate>
-          <div class="checkout-grid">
-            <label class="form-field" for="checkout-name">
-              <span>Full Name</span>
-              <input id="checkout-name" name="customer_name" type="text" autocomplete="name" required />
+          <section data-checkout-details>
+            <div class="checkout-grid">
+              <label class="form-field" for="checkout-name">
+                <span>Full Name</span>
+                <input id="checkout-name" name="customer_name" type="text" autocomplete="name" required />
+              </label>
+              <label class="form-field" for="checkout-email">
+                <span>Email</span>
+                <input id="checkout-email" name="customer_email" type="email" autocomplete="email" readonly required />
+              </label>
+              <label class="form-field" for="checkout-phone">
+                <span>Phone Number</span>
+                <input id="checkout-phone" name="customer_phone" type="tel" autocomplete="tel" required />
+              </label>
+              <label class="form-field" for="checkout-city">
+                <span>City</span>
+                <input id="checkout-city" name="city" type="text" autocomplete="address-level2" required />
+              </label>
+              <label class="form-field" for="checkout-state">
+                <span>State</span>
+                <input id="checkout-state" name="state" type="text" autocomplete="address-level1" required />
+              </label>
+              <label class="form-field" for="checkout-pin">
+                <span>PIN Code</span>
+                <input id="checkout-pin" name="pin_code" type="text" inputmode="numeric" autocomplete="postal-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required />
+              </label>
+              <label class="form-field form-field--full" for="checkout-address">
+                <span>Delivery Address</span>
+                <textarea id="checkout-address" name="address" autocomplete="street-address" required></textarea>
+              </label>
+              <label class="form-field form-field--full" for="checkout-note">
+                <span>Optional Note</span>
+                <textarea id="checkout-note" name="note"></textarea>
+              </label>
+            </div>
+            <section class="checkout-payment-section" aria-labelledby="checkout-payment-title">
+              <p class="checkout-section-label" id="checkout-payment-title">Payment Method</p>
+              <div class="checkout-payment-option" data-cod-payment-option>
+                <span class="checkout-payment-mark" aria-hidden="true">✓</span>
+                <div>
+                  <strong>Cash on Delivery</strong>
+                  <p>Pay in cash when your order is delivered.</p>
+                </div>
+              </div>
+            </section>
+            <div class="checkout-summary">
+              <div class="cart-total"><span>Order Total</span><span data-checkout-total>$0.00</span></div>
+            </div>
+            <button class="login-submit checkout-submit" type="submit" data-review-order>Review Cash on Delivery Order</button>
+          </section>
+          <section class="checkout-confirmation" data-checkout-confirmation hidden>
+            <p class="checkout-section-label">Final Confirmation</p>
+            <div class="checkout-confirmation-items" data-cod-confirmation-items></div>
+            <div class="checkout-confirmation-grid">
+              <div>
+                <span>Delivery Address</span>
+                <p data-cod-confirmation-address></p>
+              </div>
+              <div>
+                <span>Phone Number</span>
+                <p data-cod-confirmation-phone></p>
+              </div>
+              <div>
+                <span>Payment Method</span>
+                <p>Cash on Delivery</p>
+              </div>
+              <div>
+                <span>Total Amount</span>
+                <p class="checkout-confirmation-total" data-cod-confirmation-total></p>
+              </div>
+            </div>
+            <p class="checkout-cod-message" data-cod-payment-message></p>
+            <label class="checkout-confirm-checkbox">
+              <input type="checkbox" data-cod-confirm-checkbox />
+              <span>I confirm my delivery details and agree to pay the order amount on delivery.</span>
             </label>
-            <label class="form-field" for="checkout-email">
-              <span>Email</span>
-              <input id="checkout-email" name="customer_email" type="email" autocomplete="email" readonly required />
-            </label>
-            <label class="form-field" for="checkout-phone">
-              <span>Phone Number</span>
-              <input id="checkout-phone" name="customer_phone" type="tel" autocomplete="tel" required />
-            </label>
-            <label class="form-field" for="checkout-city">
-              <span>City</span>
-              <input id="checkout-city" name="city" type="text" autocomplete="address-level2" required />
-            </label>
-            <label class="form-field" for="checkout-state">
-              <span>State</span>
-              <input id="checkout-state" name="state" type="text" autocomplete="address-level1" required />
-            </label>
-            <label class="form-field" for="checkout-pin">
-              <span>PIN Code</span>
-              <input id="checkout-pin" name="pin_code" type="text" inputmode="numeric" autocomplete="postal-code" pattern="[0-9]{6}" minlength="6" maxlength="6" required />
-            </label>
-            <label class="form-field form-field--full" for="checkout-address">
-              <span>Delivery Address</span>
-              <textarea id="checkout-address" name="address" autocomplete="street-address" required></textarea>
-            </label>
-            <label class="form-field form-field--full" for="checkout-note">
-              <span>Optional Note</span>
-              <textarea id="checkout-note" name="note"></textarea>
-            </label>
-          </div>
-          <div class="checkout-summary">
-            <div class="cart-total"><span>Order Total</span><span data-checkout-total>₹0</span></div>
-          </div>
+            <div class="checkout-confirmation-actions">
+              <button class="checkout-back-button" type="button" data-back-to-checkout>Back</button>
+              <button class="login-submit checkout-submit" type="submit" data-place-order disabled>Confirm Cash on Delivery Order</button>
+            </div>
+          </section>
+          <section class="checkout-success-panel" data-checkout-success-panel hidden>
+            <span class="checkout-success-icon" aria-hidden="true">✓</span>
+            <h4>Cash on Delivery order placed successfully.</h4>
+            <dl>
+              <div><dt>Order ID</dt><dd data-cod-success-order-id></dd></div>
+              <div><dt>Total</dt><dd data-cod-success-total></dd></div>
+              <div><dt>Payment Method</dt><dd data-cod-success-payment-method></dd></div>
+              <div><dt>Payment Status</dt><dd data-cod-success-payment-status></dd></div>
+            </dl>
+            <p>Please keep the order amount ready when your order is delivered.</p>
+            <p class="checkout-success-cart-note" data-cod-success-cart-note hidden></p>
+          </section>
           <p class="auth-message auth-error" data-checkout-error role="alert" hidden></p>
           <p class="auth-message auth-success" data-checkout-success role="status" hidden></p>
-          <button class="login-submit checkout-submit" type="submit" data-place-order>Place Order</button>
         </form>
       </div>
     `;
@@ -1839,6 +2257,15 @@
 
     const form = $("[data-checkout-form]", modal);
     form?.addEventListener("submit", handleCheckoutSubmit);
+    $("[data-back-to-checkout]", modal)?.addEventListener("click", () => {
+      resetCheckoutMessage(modal);
+      setCheckoutStep(modal, "details");
+      window.setTimeout(() => $("#checkout-name", modal)?.focus(), 40);
+    });
+    $("[data-cod-confirm-checkbox]", modal)?.addEventListener("change", (event) => {
+      const submitButton = $("[data-place-order]", modal);
+      if (submitButton) submitButton.disabled = !event.currentTarget.checked;
+    });
   }
 
   function prefillCheckoutForm(modal) {
@@ -1884,10 +2311,12 @@
     if (!modal) return;
     const form = $("[data-checkout-form]", modal);
     if (form) {
+      form.reset();
       form.dataset.checkoutToken = crypto.randomUUID();
       form.dataset.submitting = "false";
     }
     resetCheckoutMessage(modal);
+    setCheckoutStep(modal, "details");
     prefillCheckoutForm(modal);
     updateCheckoutSummary(modal);
     closeCart();
@@ -1910,9 +2339,36 @@
     const form = event.currentTarget;
     const modal = form.closest(".checkout-modal");
     if (!modal) return;
+
+    resetCheckoutMessage(modal);
+    if (form.dataset.step !== "confirmation") {
+      if (!form.checkValidity()) {
+        showCheckoutMessage(modal, "error", "Please complete all required checkout fields.");
+        form.reportValidity();
+        return;
+      }
+      if (!cart.length || !renderCheckoutConfirmation(modal)) {
+        showCheckoutMessage(modal, "error", "Your cart is empty.");
+        return;
+      }
+      const confirmationCheckbox = $("[data-cod-confirm-checkbox]", modal);
+      const submitButton = $("[data-place-order]", modal);
+      if (confirmationCheckbox) confirmationCheckbox.checked = false;
+      if (submitButton) submitButton.disabled = true;
+      setCheckoutStep(modal, "confirmation");
+      window.setTimeout(() => confirmationCheckbox?.focus(), 40);
+      return;
+    }
+
     if (form.dataset.submitting === "true") return;
 
     const submitButton = $("[data-place-order]", form);
+    const confirmationCheckbox = $("[data-cod-confirm-checkbox]", form);
+    if (!confirmationCheckbox?.checked) {
+      showCheckoutMessage(modal, "error", "Please confirm the Cash on Delivery order.");
+      return;
+    }
+
     form.dataset.submitting = "true";
     if (submitButton) {
       submitButton.disabled = true;
@@ -1922,19 +2378,10 @@
     const releaseSubmission = () => {
       form.dataset.submitting = "false";
       if (submitButton) {
-        submitButton.disabled = false;
-        submitButton.textContent = "Place Order";
+        submitButton.disabled = !confirmationCheckbox?.checked;
+        submitButton.textContent = "Confirm Cash on Delivery Order";
       }
     };
-
-    resetCheckoutMessage(modal);
-
-    if (!form.checkValidity()) {
-      showCheckoutMessage(modal, "error", "Please complete all required checkout fields.");
-      form.reportValidity();
-      releaseSubmission();
-      return;
-    }
 
     await waitForAuthReady();
     if (!authUser) {
@@ -1978,7 +2425,12 @@
       if (error) throw error;
 
       const order = Array.isArray(data) ? data[0] : data;
-      if (!order?.order_id || !Number.isFinite(Number(order.total_amount))) {
+      if (
+        !order?.order_id ||
+        !Number.isFinite(Number(order.total_amount)) ||
+        order.payment_method !== "COD" ||
+        !PAYMENT_STATUSES.includes(order.payment_status)
+      ) {
         throw new Error("The order response was incomplete.");
       }
 
@@ -2004,17 +2456,27 @@
         console.error("Order succeeded, but the active account changed before cart clearing.");
       }
       const total = $("[data-checkout-total]", modal);
-      if (total) total.textContent = money(order.total_amount);
+      if (total) total.textContent = formatCheckoutMoney(order.total_amount);
       delete form.dataset.checkoutToken;
-      showCheckoutMessage(
-        modal,
-        "success",
-        cartClearFailed
-          ? `Order placed successfully. Order ID: ${order.order_id}. Total: ${money(order.total_amount)}. Your cart could not be cleared automatically.`
-          : `Order placed successfully. Order ID: ${order.order_id}. Total: ${money(order.total_amount)}`
-      );
-      showToast("Order placed successfully");
-      if (submitButton) submitButton.textContent = "Order Placed";
+      const successValues = {
+        "[data-cod-success-order-id]": order.order_id,
+        "[data-cod-success-total]": formatCheckoutMoney(order.total_amount),
+        "[data-cod-success-payment-method]": getOrderPaymentMethod(order.payment_method),
+        "[data-cod-success-payment-status]": getOrderPaymentStatus(order.payment_status),
+      };
+      Object.entries(successValues).forEach(([selector, value]) => {
+        const target = $(selector, modal);
+        if (target) target.textContent = value;
+      });
+      const cartNote = $("[data-cod-success-cart-note]", modal);
+      if (cartNote) {
+        cartNote.hidden = !cartClearFailed;
+        cartNote.textContent = cartClearFailed
+          ? "Your order was placed, but your cart could not be cleared automatically."
+          : "";
+      }
+      setCheckoutStep(modal, "success");
+      showToast("Cash on Delivery order placed successfully");
     } catch (error) {
       console.error("Checkout place_order RPC failed", {
         error,
@@ -2521,9 +2983,11 @@
 
     const accountName = $("[data-account-name]", modal);
     const accountEmail = $("[data-account-email]", modal);
+    const myOrdersLink = $("[data-my-orders-link]", modal);
 
     if (accountName) accountName.textContent = getAuthName();
     if (accountEmail) accountEmail.textContent = getAuthEmail();
+    if (myOrdersLink) myOrdersLink.hidden = !authUser;
   }
 
   async function initSupabaseAuth() {
@@ -2547,9 +3011,11 @@
         void (async () => {
           authReady = true;
           authUser = session?.user || null;
+          resetCustomerOrdersForAuthChange();
           await synchronizeCollectionOwner(authUser, { migrate: true });
           updateAuthUI();
           refreshAdminPageAccess();
+          refreshMyOrdersPageAccess();
         })();
       });
     } catch (error) {
@@ -2560,6 +3026,7 @@
       authReady = true;
       updateAuthUI();
       refreshAdminPageAccess();
+      refreshMyOrdersPageAccess();
     }
   }
 
@@ -2649,6 +3116,7 @@
           <h4 data-account-name>Player</h4>
           <p class="login-note">Logged in as: <strong data-account-email></strong></p>
           <p class="auth-message auth-error" data-account-error data-auth-message role="alert" hidden></p>
+          <a class="account-orders-link" href="my-orders.html" data-my-orders-link hidden>My Orders</a>
           <button class="login-submit" type="button" data-logout>Logout</button>
         </section>
       </div>
@@ -2701,8 +3169,10 @@
         if (error) throw error;
 
         authUser = data?.user || data?.session?.user || null;
+        resetCustomerOrdersForAuthChange();
         await synchronizeCollectionOwner(authUser, { migrate: true });
         updateAuthUI();
+        refreshMyOrdersPageAccess();
         showToast("Logged in successfully");
         closeLogin();
       } catch (error) {
@@ -2762,8 +3232,10 @@
         if (error) throw error;
 
         authUser = data?.session?.user || null;
+        resetCustomerOrdersForAuthChange();
         await synchronizeCollectionOwner(authUser, { migrate: true });
         updateAuthUI();
+        refreshMyOrdersPageAccess();
 
         if (data?.session) {
           showAuthMessage(modal, "register", "success", "Account created successfully. You are now logged in.");
@@ -2790,8 +3262,10 @@
       if (error) throw error;
 
       authUser = null;
+      resetCustomerOrdersForAuthChange();
       await synchronizeCollectionOwner(null, { migrate: true });
       updateAuthUI();
+      refreshMyOrdersPageAccess();
       closeLogin();
       showToast("Logged out successfully");
     } catch (error) {
@@ -3002,6 +3476,7 @@
         closeCheckout();
         closeSearch();
         closeLogin();
+        closeCustomerOrderDetails();
         closeCookiePreferences();
         closeMobileDrawer();
       }
@@ -3181,6 +3656,7 @@
     bindWishlistPageActions();
     authSessionPromise = initSupabaseAuth();
     initAdminPage();
+    initMyOrdersPage();
     initWishlist();
     initCarousel();
     bindHeaderActions();

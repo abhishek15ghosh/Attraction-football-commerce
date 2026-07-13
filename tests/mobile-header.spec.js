@@ -76,13 +76,16 @@ async function installSupabaseStub(page, options = {}) {
     let currentUser = config.user || null;
     let remainingPlaceOrderFailures = Number(config.failPlaceOrderAttempts || 0);
     let remainingCartMergeFailures = Number(config.failCartMergeAttempts || 0);
+    let remainingOrderLoadFailures = Number(config.failOrderLoadAttempts || 0);
     const listeners = [];
     const state = {
       rpcs: [],
       placeOrderCalls: [],
       statusUpdateCalls: [],
+      paymentStatusUpdateCalls: [],
       inserts: [],
       updates: [],
+      selects: [],
       cloudCarts: JSON.parse(JSON.stringify(config.cloudCarts || {})),
       cloudWishlists: JSON.parse(JSON.stringify(config.cloudWishlists || {})),
     };
@@ -263,6 +266,8 @@ async function installSupabaseStub(page, options = {}) {
               order_id: config.orderId || "order-test-001",
               total_amount: config.serverTotal ?? 219.99,
               order_status: "Pending",
+              payment_method: "COD",
+              payment_status: "Unpaid",
             }],
             error: null,
           };
@@ -279,6 +284,23 @@ async function installSupabaseStub(page, options = {}) {
             error: null,
           };
         }
+        if (name === "update_order_payment_status") {
+          state.paymentStatusUpdateCalls.push(payload);
+          if (config.failPaymentStatusUpdate) {
+            return { data: null, error: { message: config.failPaymentStatusUpdate } };
+          }
+          return {
+            data: [{
+              order_id: payload.p_order_id,
+              payment_method: "COD",
+              payment_status: payload.p_payment_status,
+              payment_collected_at: payload.p_payment_status === "Paid"
+                ? "2026-07-11T12:00:00.000Z"
+                : null,
+            }],
+            error: null,
+          };
+        }
         return { data: null, error: { message: "Unknown RPC" } };
       },
       from: (table) => ({
@@ -286,8 +308,10 @@ async function installSupabaseStub(page, options = {}) {
           state.inserts.push({ table, payload });
           return Promise.resolve({ data: payload, error: null });
         },
-        select: () => {
+        select: (columns = "*") => {
           const filters = [];
+          let orderBy = null;
+          state.selects.push({ table, columns, filters });
           const execute = async () => {
             if (table === "cart_items") {
               if (config.failCartLoad) return { data: null, error: { message: "Cart load failed" } };
@@ -299,14 +323,42 @@ async function installSupabaseStub(page, options = {}) {
               const userId = filters.find(([column]) => column === "user_id")?.[1] || currentUser?.id;
               return { data: joinedWishlistRows(userId), error: null };
             }
-            return { data: config.orders || [], error: config.ordersError ? { message: config.ordersError } : null };
+            if (table === "orders") {
+              if (config.ordersDelay) await new Promise((resolve) => setTimeout(resolve, config.ordersDelay));
+              if (remainingOrderLoadFailures > 0) {
+                remainingOrderLoadFailures -= 1;
+                return { data: null, error: { message: config.ordersError || "Orders load failed" } };
+              }
+              if (config.ordersError && !config.failOrderLoadAttempts) {
+                return { data: null, error: { message: config.ordersError } };
+              }
+
+              let rows = [...(config.orders || [])];
+              filters.forEach(([column, value]) => {
+                rows = rows.filter((row) => row[column] === value);
+              });
+              if (orderBy) {
+                rows.sort((first, second) => {
+                  const firstValue = first[orderBy.column];
+                  const secondValue = second[orderBy.column];
+                  const direction = orderBy.ascending ? 1 : -1;
+                  return String(firstValue).localeCompare(String(secondValue)) * direction;
+                });
+              }
+              return { data: rows, error: null };
+            }
+
+            return { data: [], error: null };
           };
           const builder = {
             eq: (column, value) => {
               filters.push([column, value]);
               return builder;
             },
-            order: () => execute(),
+            order: (column, options = {}) => {
+              orderBy = { column, ascending: options.ascending !== false };
+              return execute();
+            },
             then: (resolve, reject) => execute().then(resolve, reject),
           };
           return builder;
@@ -476,6 +528,21 @@ async function fillCheckoutDelivery(page, values = {}) {
   await page.locator("#checkout-state").fill(values.state || "West Bengal");
   await page.locator("#checkout-pin").fill(values.pin || "700001");
   if (values.note) await page.locator("#checkout-note").fill(values.note);
+}
+
+async function reviewCashOnDeliveryOrder(page) {
+  const modal = page.locator(".checkout-modal");
+  await modal.getByRole("button", { name: "Review Cash on Delivery Order" }).click();
+  await expect(modal.locator("[data-checkout-confirmation]")).toBeVisible();
+  return modal;
+}
+
+async function confirmCashOnDeliveryOrder(page) {
+  const modal = page.locator(".checkout-modal");
+  const checkbox = modal.locator("[data-cod-confirm-checkbox]");
+  await checkbox.check();
+  await modal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+  return modal;
 }
 
 async function loginAs(page, email) {
@@ -2045,6 +2112,10 @@ test("checkout is a fixed responsive modal above page content", async ({ page })
   expect(panelBox.x + panelBox.width).toBeLessThanOrEqual(390);
   expect(panelBox.y).toBeGreaterThanOrEqual(0);
   expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(844);
+  await fillCheckoutDelivery(page);
+  await reviewCashOnDeliveryOrder(page);
+  await expect(modal.locator("[data-checkout-confirmation]")).toBeVisible();
+  await expect(modal.getByRole("button", { name: "Confirm Cash on Delivery Order" })).toBeDisabled();
   await expectNoHorizontalOverflow(page);
 });
 
@@ -2058,7 +2129,7 @@ test("checkout validates required fields before order insert", async ({ page }) 
 
   const modal = page.locator(".checkout-modal");
   await expect(modal).toHaveClass(/is-open/);
-  await modal.getByRole("button", { name: "Place Order" }).click();
+  await modal.getByRole("button", { name: "Review Cash on Delivery Order" }).click();
   await expect(modal.getByText("Please complete all required checkout fields.")).toBeVisible();
 
   const placeOrderCalls = await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderCalls.length);
@@ -2095,12 +2166,26 @@ test("checkout uses place_order RPC with server-authoritative fields and total",
   await expect(page.locator("#checkout-email")).toHaveValue("buyer@example.com");
   await expect(page.locator("#checkout-email")).toHaveAttribute("readonly", "");
   await fillCheckoutDelivery(page, { note: "Call before delivery" });
-  await page.locator(".checkout-modal").getByRole("button", { name: "Place Order" }).click();
+  const modal = await reviewCashOnDeliveryOrder(page);
+  await expect(modal.locator("[data-cod-payment-option]")).toContainText("Cash on Delivery");
+  await expect(modal.locator("[data-cod-confirmation-items]")).toContainText("Predator Elite FG");
+  await expect(modal.locator("[data-cod-confirmation-items]")).toContainText("Quantity: 1");
+  await expect(modal.locator("[data-cod-confirmation-address]")).toHaveText("42 Football Street, Kolkata, West Bengal, 700001");
+  await expect(modal.locator("[data-cod-confirmation-phone]")).toHaveText("+91 98765 43210");
+  await expect(modal.locator("[data-cod-confirmation-total]")).toHaveText("$219.99");
+  await expect(modal.locator("[data-cod-payment-message]")).toHaveText("You will pay $219.99 when the order is delivered.");
+  const finalButton = modal.getByRole("button", { name: "Confirm Cash on Delivery Order" });
+  await expect(finalButton).toBeDisabled();
+  expect(await modal.locator('input[name*="card" i], input[name*="upi" i], input[name*="cvv" i], input[name*="expiry" i]').count()).toBe(0);
+  expect(await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderCalls.length)).toBe(0);
+  await confirmCashOnDeliveryOrder(page);
 
-  await expect(
-    page.locator(".checkout-modal").getByText("Order placed successfully. Order ID: order-test-123. Total: 487.65")
-  ).toBeVisible();
-  await expect(page.locator("[data-checkout-total]")).toHaveText("487.65");
+  await expect(modal.getByText("Cash on Delivery order placed successfully.")).toBeVisible();
+  await expect(modal.locator("[data-cod-success-order-id]")).toHaveText("order-test-123");
+  await expect(modal.locator("[data-cod-success-total]")).toHaveText("$487.65");
+  await expect(modal.locator("[data-cod-success-payment-method]")).toHaveText("Cash on Delivery");
+  await expect(modal.locator("[data-cod-success-payment-status]")).toHaveText("Unpaid");
+  await expect(modal).toContainText("Please keep the order amount ready when your order is delivered.");
   await expect(page.locator(".cart-count")).toHaveText("0");
 
   const state = await page.evaluate(() => window.__attractionSupabaseTestState);
@@ -2123,6 +2208,9 @@ test("checkout uses place_order RPC with server-authoritative fields and total",
   expect(payload).not.toHaveProperty("user_id");
   expect(payload).not.toHaveProperty("status");
   expect(payload).not.toHaveProperty("total_amount");
+  expect(payload).not.toHaveProperty("payment_method");
+  expect(payload).not.toHaveProperty("payment_status");
+  expect(payload).not.toHaveProperty("payment_collected_at");
   expect(payload.p_items[0]).not.toHaveProperty("product_price");
   expect(payload.p_items[0]).not.toHaveProperty("product_name");
   expect(payload.p_items[0]).not.toHaveProperty("product_category");
@@ -2155,7 +2243,8 @@ test("failed order creation keeps cart contents", async ({ page }) => {
     state: "Maharashtra",
     pin: "400001",
   });
-  await page.locator(".checkout-modal").getByRole("button", { name: "Place Order" }).click();
+  await reviewCashOnDeliveryOrder(page);
+  await confirmCashOnDeliveryOrder(page);
 
   await expect(page.locator(".checkout-modal").getByText("We could not place your order. Please try again.")).toBeVisible();
   await expect(page.locator(".checkout-modal")).not.toContainText("public.orders");
@@ -2176,7 +2265,8 @@ test("checkout safely reports unavailable products and keeps the cart", async ({
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await openCheckoutWithProduct(page);
   await fillCheckoutDelivery(page);
-  await page.locator(".checkout-modal").getByRole("button", { name: "Place Order" }).click();
+  await reviewCashOnDeliveryOrder(page);
+  await confirmCashOnDeliveryOrder(page);
 
   await expect(page.locator(".checkout-modal").getByText("One or more products are unavailable.")).toBeVisible();
   await expect(page.locator(".checkout-modal")).not.toContainText("SQL detail");
@@ -2199,12 +2289,14 @@ test("checkout reuses its token when a failed submission is retried", async ({ p
   await openCheckoutWithProduct(page);
   await fillCheckoutDelivery(page);
 
-  const placeOrder = page.locator(".checkout-modal").getByRole("button", { name: "Place Order" });
+  const modal = await reviewCashOnDeliveryOrder(page);
+  const placeOrder = modal.getByRole("button", { name: "Confirm Cash on Delivery Order" });
+  await modal.locator("[data-cod-confirm-checkbox]").check();
   await placeOrder.click();
   await expect(page.locator(".checkout-modal").getByText("We could not place your order. Please try again.")).toBeVisible();
   await expect(placeOrder).toBeEnabled();
   await placeOrder.click();
-  await expect(page.locator(".checkout-modal").getByText(/Order ID: order-retry-001/)).toBeVisible();
+  await expect(page.locator("[data-cod-success-order-id]")).toHaveText("order-retry-001");
 
   const calls = await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderCalls);
   expect(calls).toHaveLength(2);
@@ -2224,13 +2316,15 @@ test("checkout blocks rapid duplicate submissions", async ({ page }) => {
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await openCheckoutWithProduct(page);
   await fillCheckoutDelivery(page);
+  await reviewCashOnDeliveryOrder(page);
+  await page.locator("[data-cod-confirm-checkbox]").check();
 
   await page.locator("[data-checkout-form]").evaluate((form) => {
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   });
 
-  await expect(page.locator(".checkout-modal").getByText(/Order ID: order-single-001/)).toBeVisible();
+  await expect(page.locator("[data-cod-success-order-id]")).toHaveText("order-single-001");
   const calls = await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderCalls);
   expect(calls).toHaveLength(1);
 });
@@ -2272,6 +2366,9 @@ test("admin dashboard renders orders and updates order status", async ({ page })
         note: "Leave at reception",
         total_amount: 4299,
         status: "Pending",
+        payment_method: "COD",
+        payment_status: "Unpaid",
+        payment_collected_at: null,
         order_items: [
           {
             product_image: "assets/hero-football-boot.avif",
@@ -2290,6 +2387,8 @@ test("admin dashboard renders orders and updates order status", async ({ page })
   await expect(page.getByText("Ravi Customer")).toBeVisible();
   await expect(page.getByText("Predator Elite FG")).toBeVisible();
   await expect(page.getByText(/4299\.00/).first()).toBeVisible();
+  await expect(page.getByText("Payment Method:")).toBeVisible();
+  await expect(page.locator("[data-admin-current-payment-status]")).toHaveText("Unpaid");
 
   await page.locator("[data-admin-status]").selectOption("Shipped");
   await page.getByRole("button", { name: "Save Status" }).click();
@@ -2301,10 +2400,235 @@ test("admin dashboard renders orders and updates order status", async ({ page })
     p_order_id: "order-admin-001",
     p_new_status: "Shipped",
   }]);
+
+  await page.locator("[data-admin-payment-status]").selectOption("Paid");
+  await page.getByRole("button", { name: "Save Payment" }).click();
+  await expect(page.getByText("Order order-admin-001 payment status updated to Paid.")).toBeVisible();
+  await expect(page.locator("[data-admin-current-payment-status]")).toHaveText("Paid");
+  await expect(page.locator("[data-admin-payment-collected]")).toBeVisible();
+
+  const updatedState = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(updatedState.paymentStatusUpdateCalls).toEqual([{
+    p_order_id: "order-admin-001",
+    p_payment_status: "Paid",
+  }]);
   expect(state.updates).toEqual([]);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expectNoHorizontalOverflow(page);
+});
+
+test("my orders keeps the loading state until auth resolves, then requires login", async ({ page }) => {
+  await installSupabaseStub(page, { user: null, sessionDelay: 250 });
+  await page.goto("/my-orders.html", { waitUntil: "domcontentloaded" });
+
+  await expect(page.locator("[data-orders-loading]")).toBeVisible();
+  await expect(page.locator("[data-orders-login]")).toBeHidden();
+  await expect(page.locator("[data-orders-empty]")).toBeHidden();
+  await expect(page.locator("[data-orders-list]")).toBeHidden();
+
+  await expect(page.getByText("Please log in to view your orders.")).toBeVisible();
+  await expect(page.locator("[data-orders-loading]")).toBeHidden();
+  await page.getByRole("button", { name: "Log In", exact: true }).click();
+  await expect(page.locator(".login-modal")).toHaveClass(/is-open/);
+});
+
+test("my orders loads only the signed-in user's newest orders through the nested RLS query", async ({ page }) => {
+  const user = { id: "customer-one", email: "customer@example.com", user_metadata: { full_name: "Customer One" } };
+  await page.setViewportSize({ width: 1391, height: 871 });
+  await installSupabaseStub(page, {
+    user,
+    orders: [
+      {
+        id: "11111111-old-order",
+        user_id: user.id,
+        created_at: "2026-06-01T09:00:00.000Z",
+        total_amount: 49.99,
+        status: "Delivered",
+        order_items: [{ product_price: 49.99, quantity: 1 }],
+      },
+      {
+        id: "22222222-new-order",
+        user_id: user.id,
+        created_at: "2026-07-11T14:30:00.000Z",
+        total_amount: 159.97,
+        status: "Confirmed",
+        order_items: [{ product_price: 39.99, quantity: 2 }, { product_price: 79.99, quantity: 1 }],
+      },
+      {
+        id: "99999999-other-order",
+        user_id: "another-customer",
+        created_at: "2026-07-12T14:30:00.000Z",
+        total_amount: 999.99,
+        status: "Pending",
+        order_items: [],
+      },
+    ],
+  });
+  await page.goto("/my-orders.html", { waitUntil: "domcontentloaded" });
+
+  const cards = page.locator("[data-customer-order-id]");
+  await expect(cards).toHaveCount(2);
+  await expect(cards.first()).toHaveAttribute("data-customer-order-id", "22222222-new-order");
+  await expect(cards.first().locator(".order-status")).toHaveText("Confirmed");
+  await expect(cards.first().locator(".customer-order-card__metric--products")).toHaveText("3 Products");
+  await expect(cards.nth(1).locator(".customer-order-card__metric--products")).toHaveText("1 Product");
+  await expect(cards.first().locator(".customer-order-card__metric--total")).toHaveText("$159.97");
+  await expect(page.getByText("#99999999")).toHaveCount(0);
+
+  const rowAlignment = await cards.first().evaluate((card) => {
+    const labels = [...card.querySelectorAll(":scope > .customer-order-card__label")];
+    const values = [...card.querySelectorAll(":scope > .customer-order-card__primary")];
+    const textBottom = (element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      return range.getBoundingClientRect().bottom;
+    };
+    return {
+      labelTops: labels.map((label) => label.getBoundingClientRect().top),
+      textBottoms: values.map(textBottom),
+    };
+  });
+  expect(Math.max(...rowAlignment.labelTops) - Math.min(...rowAlignment.labelTops)).toBeLessThanOrEqual(1);
+  expect(Math.max(...rowAlignment.textBottoms) - Math.min(...rowAlignment.textBottoms)).toBeLessThanOrEqual(2);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(cards.first().locator(".customer-order-card__metric--products")).toHaveText("3 Products");
+  await expect(cards.first().locator(".customer-order-card__metric--total")).toHaveText("$159.97");
+  await expectNoHorizontalOverflow(page);
+
+  const state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  const orderSelect = state.selects.find((query) => query.table === "orders" && query.columns.includes("order_items"));
+  expect(orderSelect.filters).toEqual([["user_id", user.id]]);
+});
+
+test("my order details use historical item snapshots and close with Escape", async ({ page }) => {
+  const user = { id: "customer-details", email: "buyer@example.com", user_metadata: { full_name: "Buyer" } };
+  await installSupabaseStub(page, {
+    user,
+    orders: [{
+      id: "94227091-6585-4682-8d1b-0c7e000d7735",
+      user_id: user.id,
+      created_at: "2026-07-10T10:15:00.000Z",
+      customer_name: "Aarav Player",
+      customer_email: "buyer@example.com",
+      customer_phone: "+91 90000 12345",
+      address: "22 Football Avenue",
+      city: "Kolkata",
+      state: "West Bengal",
+      pin_code: "700001",
+      note: "Call before delivery",
+      total_amount: 79.98,
+      status: "Shipped",
+      payment_method: "COD",
+      payment_status: "Paid",
+      payment_collected_at: "2026-07-11T12:00:00.000Z",
+      order_items: [{
+        id: "snapshot-item-1",
+        order_id: "94227091-6585-4682-8d1b-0c7e000d7735",
+        product_id: "historical-product",
+        product_name: "Historical Match Tee",
+        product_category: "T-Shirts",
+        product_price: 39.99,
+        quantity: 2,
+        product_image: "assets/premium-football-tshirt.avif",
+      }],
+    }],
+  });
+  await page.goto("/my-orders.html", { waitUntil: "domcontentloaded" });
+
+  await page.getByRole("button", { name: "View Details" }).click();
+  const modal = page.locator("[data-order-details-modal]");
+  await expect(modal).toHaveClass(/is-open/);
+  await expect(modal).toContainText("94227091-6585-4682-8d1b-0c7e000d7735");
+  await expect(modal).toContainText("Historical Match Tee");
+  await expect(modal).toContainText("$39.99 × 2");
+  await expect(modal.locator(".customer-order-item b")).toHaveText("$79.98");
+  await expect(modal.locator(".order-details-total strong")).toHaveText("$79.98");
+  await expect(modal).toContainText("Call before delivery");
+  await expect(modal.locator(".order-status")).toHaveText("Shipped");
+  await expect(modal).toContainText("Payment Method: Cash on Delivery");
+  await expect(modal).toContainText("Payment Status: Paid");
+  await expect(modal).toContainText("Payment Collected At:");
+  await expect(modal.locator("[data-admin-payment-status], [data-admin-payment-status-save]")).toHaveCount(0);
+
+  await page.keyboard.press("Escape");
+  await expect(modal).not.toHaveClass(/is-open/);
+  await expect(page.locator("body")).not.toHaveClass(/no-scroll/);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "View Details" }).click();
+  await expect(modal).toHaveClass(/is-open/);
+  await expectNoHorizontalOverflow(page);
+  await modal.getByRole("button", { name: "Close order details" }).click();
+});
+
+test("my orders distinguishes empty history from a failed query and supports retry", async ({ page }) => {
+  const user = { id: "customer-retry", email: "retry@example.com", user_metadata: {} };
+  await installSupabaseStub(page, {
+    user,
+    failOrderLoadAttempts: 1,
+    ordersError: "private database detail",
+    orders: [{
+      id: "33333333-retry-order",
+      user_id: user.id,
+      created_at: "2026-07-09T10:00:00.000Z",
+      total_amount: 29.99,
+      status: "Pending",
+      order_items: [],
+    }],
+  });
+  await page.goto("/my-orders.html", { waitUntil: "domcontentloaded" });
+
+  await expect(page.getByText("We could not load your orders. Please try again.")).toBeVisible();
+  await expect(page.locator("[data-orders-empty]")).toBeHidden();
+  await expect(page.getByText("private database detail")).toHaveCount(0);
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.locator('[data-customer-order-id="33333333-retry-order"]')).toBeVisible();
+});
+
+test("my orders shows the empty state and remains responsive on iPhone width", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await installSupabaseStub(page, {
+    user: { id: "customer-empty", email: "empty@example.com", user_metadata: {} },
+    orders: [],
+  });
+  await page.goto("/my-orders.html", { waitUntil: "domcontentloaded" });
+
+  await expect(page.getByText("Your order history is empty.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Start Shopping" })).toHaveAttribute("href", "products.html");
+  await expectNoHorizontalOverflow(page);
+});
+
+test("signed-in account modal exposes My Orders while logged-out mode does not", async ({ page }) => {
+  const user = { id: "account-orders-user", email: "orders@example.com", user_metadata: { full_name: "Orders User" } };
+  await installSupabaseStub(page, { user: null, usersByEmail: { "orders@example.com": user } });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  const accountButton = page.locator('.header-actions button[aria-label="Account"]');
+  const myOrdersLink = page.locator("[data-my-orders-link]");
+  await accountButton.click();
+  await expect(myOrdersLink).toBeHidden();
+
+  await page.locator("#login-email").fill("orders@example.com");
+  await page.locator("#login-password").fill("valid-password");
+  await page.locator("[data-login-form]").getByRole("button", { name: "Login", exact: true }).click();
+  await expect(page.locator(".login-modal")).not.toHaveClass(/is-open/);
+  await accountButton.click();
+  await expect(myOrdersLink).toBeVisible();
+  await expect(myOrdersLink).toHaveAttribute("href", "my-orders.html");
+});
+
+test("customer order history code remains read-only", async () => {
+  const source = fs.readFileSync(path.join(process.cwd(), "script.js"), "utf8");
+  const start = source.indexOf("function setMyOrdersView");
+  const end = source.indexOf("function getCookieConsent", start);
+  const customerOrdersSource = source.slice(start, end);
+
+  expect(customerOrdersSource).toContain('.from("orders")');
+  expect(customerOrdersSource).toContain('.eq("user_id", userId)');
+  expect(customerOrdersSource).not.toMatch(/update_order_status|\.update\s*\(|\.delete\s*\(|\.insert\s*\(/);
+  expect(customerOrdersSource).not.toMatch(/cancel order|delete order|edit address/i);
 });
 
 test("order writes are RPC-only in the frontend source", async () => {
@@ -2312,9 +2636,11 @@ test("order writes are RPC-only in the frontend source", async () => {
 
   expect(source).toContain('supabaseClient.rpc("place_order"');
   expect(source).toContain('supabaseClient.rpc("update_order_status"');
+  expect(source).toContain('supabaseClient.rpc("update_order_payment_status"');
   expect(source).not.toMatch(/\.from\(["']orders["']\)\s*\.insert\s*\(/s);
   expect(source).not.toMatch(/\.from\(["']order_items["']\)\s*\.insert\s*\(/s);
   expect(source).not.toMatch(/\.from\(["']orders["']\)\s*\.update\s*\(/s);
+  expect(source).not.toMatch(/\.from\(["']orders["']\)[\s\S]*?payment_(?:method|status|collected_at)[\s\S]*?\.update\s*\(/s);
 });
 
 test("authenticated cart and wishlist are never persisted to localStorage", async () => {

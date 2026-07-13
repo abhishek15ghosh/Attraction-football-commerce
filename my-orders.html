@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>My Orders | Attraction Football</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Oswald:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="page-shell products-page my-orders-page">
+    <header class="site-header">
+      <a href="index.html" class="brand" aria-label="Attraction Football Home">
+        <span class="brand-mark">A</span>
+        <span class="brand-copy">
+          <strong>ATTRACTION</strong>
+          <small>FOOTBALL</small>
+        </span>
+      </a>
+
+      <nav class="main-nav" aria-label="Main navigation">
+        <a href="index.html">Home</a>
+        <a href="products.html">Store</a>
+        <a href="football-shoes.html">Football Shoes</a>
+        <a href="jerseys.html">Jerseys</a>
+        <a href="t-shirts.html">T-Shirts</a>
+        <a href="footballs.html">Footballs</a>
+        <a href="accessories.html">Accessories</a>
+      </nav>
+
+      <div class="header-actions" aria-label="Header actions">
+        <button type="button" aria-label="Search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.8 18a7.2 7.2 0 1 1 5.06-12.32A7.2 7.2 0 0 1 10.8 18Zm0-2a5.2 5.2 0 1 0 0-10.4 5.2 5.2 0 0 0 0 10.4Zm5.7.1 4.1 4.1-1.4 1.4-4.1-4.1 1.4-1.4Z"/></svg>
+        </button>
+        <button type="button" aria-label="Account">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12.2a4.8 4.8 0 1 1 0-9.6 4.8 4.8 0 0 1 0 9.6Zm0-2a2.8 2.8 0 1 0 0-5.6 2.8 2.8 0 0 0 0 5.6ZM3.7 21.6v-1.4c0-3.7 3.6-6.2 8.3-6.2s8.3 2.5 8.3 6.2v1.4h-2v-1.4c0-2.4-2.5-4.2-6.3-4.2s-6.3 1.8-6.3 4.2v1.4h-2Z"/></svg>
+        </button>
+        <button class="cart-button" type="button" aria-label="Cart">
+          <span class="cart-count">0</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 22a2 2 0 1 1 0-4 2 2 0 0 1 0 4Zm10 0a2 2 0 1 1 0-4 2 2 0 0 1 0 4ZM4.3 5 4 3H1V1h4.7l.3 2H23l-2.2 10.4A3 3 0 0 1 17.9 16H8a3 3 0 0 1-3-2.6L3.7 5h.6Zm2.1 0 1.2 8.1A1 1 0 0 0 8.6 14h9.3a1 1 0 0 0 1-.8L20.2 5H6.4Z"/></svg>
+        </button>
+        <button class="menu-toggle" type="button" aria-label="Open menu" aria-controls="mobile-drawer" aria-expanded="false">
+          <span></span>
+        </button>
+      </div>
+    </header>
+
+    <section class="products-hero my-orders-hero" aria-labelledby="my-orders-title">
+      <p class="eyebrow lime">Account</p>
+      <h1 id="my-orders-title">My Orders</h1>
+      <p>Review your Attraction Football order history, delivery details, products, and current status.</p>
+    </section>
+
+    <section class="my-orders-section" aria-labelledby="order-history-title" data-my-orders-page>
+      <div class="my-orders-heading">
+        <p id="order-history-title" class="eyebrow lime">Order History</p>
+      </div>
+
+      <div class="my-orders-state" data-orders-loading role="status" aria-live="polite">
+        <span class="my-orders-loader" aria-hidden="true"></span>
+        <h3>Loading your orders</h3>
+        <p>Securely checking your account and order history.</p>
+      </div>
+
+      <div class="my-orders-state" data-orders-login hidden>
+        <h3>Please log in to view your orders.</h3>
+        <button class="my-orders-primary-button" type="button" data-orders-login-button>Log In</button>
+      </div>
+
+      <div class="my-orders-state" data-orders-empty hidden>
+        <h3>Your order history is empty.</h3>
+        <a class="my-orders-primary-button" href="products.html">Start Shopping</a>
+      </div>
+
+      <div class="my-orders-state my-orders-state--error" data-orders-error hidden role="alert">
+        <h3>We could not load your orders. Please try again.</h3>
+        <button class="my-orders-primary-button" type="button" data-orders-retry>Retry</button>
+      </div>
+
+      <div class="my-orders-list" data-orders-list hidden></div>
+    </section>
+
+    <section id="services" class="service-bar" aria-label="Store benefits">
+      <article>
+        <span>▣</span>
+        <div><strong>Secure Payments</strong><small>100% secure checkout</small></div>
+      </article>
+      <article>
+        <span>⬡</span>
+        <div><strong>Authentic Products</strong><small>Official & genuine gear</small></div>
+      </article>
+      <article>
+        <span>▤</span>
+        <div><strong>Worldwide Shipping</strong><small>Delivering to your door</small></div>
+      </article>
+      <article>
+        <span>☏</span>
+        <div><strong>24/7 Customer Support</strong><small>We are here to help</small></div>
+      </article>
+    </section>
+
+    <footer class="site-footer" aria-labelledby="footer-title">
+      <div class="footer-grid">
+        <section class="footer-brand-block" aria-labelledby="footer-title">
+          <a href="index.html" class="footer-brand" aria-label="Attraction Football Home">
+            <span class="brand-mark">A</span>
+            <span><strong id="footer-title">Attraction Football</strong><small>Premium Football Store</small></span>
+          </a>
+          <p>Premium football boots, jerseys, t-shirts, balls, and performance gear built for players.</p>
+          <p class="footer-note">Engineered for match days, training sessions, and the football lifestyle beyond the pitch.</p>
+          <address class="footer-contact" aria-label="Contact information">
+            <a href="mailto:support@attractionfootball.com">support@attractionfootball.com</a>
+            <a href="tel:+919876543210">+91&nbsp;98765&nbsp;43210</a>
+            <span>India</span>
+            <span>24/7 Customer Support</span>
+          </address>
+          <div class="footer-socials" aria-label="Social media links">
+            <a href="https://www.instagram.com/" target="_blank" rel="noopener noreferrer" aria-label="Instagram"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.8 2h8.4A5.8 5.8 0 0 1 22 7.8v8.4a5.8 5.8 0 0 1-5.8 5.8H7.8A5.8 5.8 0 0 1 2 16.2V7.8A5.8 5.8 0 0 1 7.8 2Zm0 2A3.8 3.8 0 0 0 4 7.8v8.4A3.8 3.8 0 0 0 7.8 20h8.4a3.8 3.8 0 0 0 3.8-3.8V7.8A3.8 3.8 0 0 0 16.2 4H7.8Zm4.2 3.2a4.8 4.8 0 1 1 0 9.6 4.8 4.8 0 0 1 0-9.6Zm0 2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6Zm5.1-2.4a1.1 1.1 0 1 1 0 2.2 1.1 1.1 0 0 1 0-2.2Z"/></svg></a>
+            <a href="https://www.facebook.com/" target="_blank" rel="noopener noreferrer" aria-label="Facebook"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.6 22v-8h2.7l.4-3.1h-3.1V8.8c0-.9.3-1.5 1.6-1.5h1.7V4.5c-.8-.1-1.6-.2-2.5-.2-2.5 0-4.1 1.5-4.1 4.2v2.4H7.5V14h2.8v8h3.3Z"/></svg></a>
+            <a href="https://x.com/" target="_blank" rel="noopener noreferrer" aria-label="X/Twitter"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3.4 3 7.1 9.4L3 21h3.1l5.9-6.7 5 6.7h3.6l-7.4-9.9L20.2 3h-3.1l-5.5 6.2L7 3H3.4Zm4.2 2 9 12h-1.2L6.4 5h1.2Z"/></svg></a>
+            <a href="https://www.youtube.com/" target="_blank" rel="noopener noreferrer" aria-label="YouTube"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.6 7.2a3 3 0 0 0-2.1-2.1C17.7 4.6 12 4.6 12 4.6s-5.7 0-7.5.5a3 3 0 0 0-2.1 2.1C2 9 2 12 2 12s0 3 .4 4.8a3 3 0 0 0 2.1 2.1c1.8.5 7.5.5 7.5.5s5.7 0 7.5-.5a3 3 0 0 0 2.1-2.1C22 15 22 12 22 12s0-3-.4-4.8ZM10 15.5v-7l6 3.5-6 3.5Z"/></svg></a>
+          </div>
+        </section>
+
+        <nav class="footer-column" aria-labelledby="footer-shop">
+          <h3 id="footer-shop">Shop</h3>
+          <a href="football-shoes.html">Football Shoes</a>
+          <a href="jerseys.html">Jerseys</a>
+          <a href="t-shirts.html">T-Shirts</a>
+          <a href="footballs.html">Footballs</a>
+          <a href="accessories.html">Accessories</a>
+        </nav>
+        <nav class="footer-column" aria-labelledby="footer-support">
+          <h3 id="footer-support">Support</h3>
+          <a href="contact.html">Contact Us</a>
+          <a href="shipping-delivery.html">Shipping & Delivery</a>
+          <a href="returns-exchanges.html">Returns & Exchanges</a>
+          <a href="faqs.html">FAQs</a>
+        </nav>
+        <nav class="footer-column" aria-labelledby="footer-company">
+          <h3 id="footer-company">Company</h3>
+          <a href="about.html">About Us</a>
+          <a href="careers.html">Careers</a>
+          <a href="privacy-policy.html">Privacy Policy</a>
+          <a href="terms-conditions.html">Terms & Conditions</a>
+        </nav>
+        <section class="footer-newsletter" aria-labelledby="footer-newsletter-title">
+          <p class="eyebrow lime">Newsletter</p>
+          <h3 id="footer-newsletter-title">Join the Club</h3>
+          <p>Get new drops, exclusive offers, and football gear updates.</p>
+          <form class="newsletter-form" aria-label="Newsletter signup">
+            <label class="sr-only" for="orders-footer-email">Email address</label>
+            <input id="orders-footer-email" name="email" type="email" placeholder="Email address" autocomplete="email" />
+            <button type="button">Subscribe</button>
+          </form>
+        </section>
+      </div>
+      <div class="footer-trust" aria-label="Payment and trust guarantees">
+        <span>Secure Payments</span><span>Authentic Products</span><span>Fast Delivery</span><span>Easy Returns</span><span>SSL Protected</span>
+      </div>
+      <div class="footer-bottom">
+        <p>© 2026 Attraction Football. All rights reserved.</p>
+        <nav aria-label="Footer legal links">
+          <a href="privacy-policy.html">Privacy Policy</a>
+          <a href="terms-conditions.html">Terms</a>
+          <a href="cookies.html">Cookies</a>
+        </nav>
+      </div>
+    </footer>
+  </main>
+
+  <div class="order-details-modal" data-order-details-modal aria-hidden="true">
+    <section class="order-details-panel" role="dialog" aria-modal="true" aria-labelledby="order-details-title">
+      <header class="order-details-header">
+        <div><p class="eyebrow lime">Order Record</p><h2 id="order-details-title">Order Details</h2></div>
+        <button class="close-btn" type="button" data-close-order-details aria-label="Close order details">×</button>
+      </header>
+      <div class="order-details-content" data-order-details-content></div>
+    </section>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="script.js" defer></script>
+</body>
+</html>
