@@ -83,6 +83,8 @@ async function installSupabaseStub(page, options = {}) {
       placeOrderCalls: [],
       statusUpdateCalls: [],
       paymentStatusUpdateCalls: [],
+      cancellationRequestCalls: [],
+      cancellationReviewCalls: [],
       inserts: [],
       updates: [],
       selects: [],
@@ -297,6 +299,58 @@ async function installSupabaseStub(page, options = {}) {
               payment_collected_at: payload.p_payment_status === "Paid"
                 ? "2026-07-11T12:00:00.000Z"
                 : null,
+            }],
+            error: null,
+          };
+        }
+        if (name === "request_order_cancellation") {
+          state.cancellationRequestCalls.push(payload);
+          if (config.cancellationRequestDelay) {
+            await new Promise((resolve) => setTimeout(resolve, config.cancellationRequestDelay));
+          }
+          if (config.failCancellationRequest) {
+            return { data: null, error: { message: config.failCancellationRequest } };
+          }
+          const order = (config.orders || []).find((entry) => entry.id === payload.p_order_id);
+          if (!order) return { data: null, error: { message: "Order was not found" } };
+          order.cancellation_request_status = "Pending";
+          order.cancellation_reason = payload.p_reason;
+          order.cancellation_requested_at = "2026-07-13T10:15:00.000Z";
+          return {
+            data: [{
+              order_id: order.id,
+              cancellation_request_status: "Pending",
+              cancellation_reason: payload.p_reason,
+              cancellation_requested_at: order.cancellation_requested_at,
+            }],
+            error: null,
+          };
+        }
+        if (name === "review_order_cancellation") {
+          state.cancellationReviewCalls.push(payload);
+          if (config.failCancellationReview) {
+            return { data: null, error: { message: config.failCancellationReview } };
+          }
+          const order = (config.orders || []).find((entry) => entry.id === payload.p_order_id);
+          if (!order || order.cancellation_request_status !== "Pending") {
+            return { data: null, error: { message: "Cancellation request has already been reviewed" } };
+          }
+          order.cancellation_request_status = payload.p_decision;
+          order.cancellation_reviewed_at = "2026-07-13T11:00:00.000Z";
+          order.cancellation_reviewed_by = currentUser?.id || null;
+          order.cancellation_admin_note = payload.p_admin_note;
+          if (payload.p_decision === "Approved") {
+            order.status = "Cancelled";
+            order.cancelled_at = "2026-07-13T11:00:00.000Z";
+          }
+          return {
+            data: [{
+              order_id: order.id,
+              order_status: order.status,
+              cancellation_request_status: order.cancellation_request_status,
+              cancellation_reviewed_at: order.cancellation_reviewed_at,
+              cancellation_admin_note: order.cancellation_admin_note,
+              cancelled_at: order.cancelled_at || null,
             }],
             error: null,
           };
@@ -2418,6 +2472,329 @@ test("admin dashboard renders orders and updates order status", async ({ page })
   await expectNoHorizontalOverflow(page);
 });
 
+test("eligible customers can request cancellation once through the secure RPC", async ({ page }) => {
+  const user = { id: "cancellation-customer", email: "cancel@example.com", user_metadata: { full_name: "Cancel Customer" } };
+  const recentOrderDate = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  await installSupabaseStub(page, {
+    user,
+    cancellationRequestDelay: 100,
+    orders: [
+      {
+        id: "cancel-pending-001",
+        user_id: user.id,
+        created_at: recentOrderDate,
+        total_amount: 219.99,
+        status: "Pending",
+        payment_method: "COD",
+        payment_status: "Unpaid",
+        cancellation_request_status: "None",
+        order_items: [{ product_price: 219.99, quantity: 1 }],
+      },
+      {
+        id: "cancel-confirmed-002",
+        user_id: user.id,
+        created_at: recentOrderDate,
+        total_amount: 199.99,
+        status: "Confirmed",
+        payment_method: "COD",
+        payment_status: "Unpaid",
+        cancellation_request_status: "None",
+        order_items: [{ product_price: 199.99, quantity: 1 }],
+      },
+    ],
+  });
+  await page.goto("/my-orders.html", { waitUntil: "domcontentloaded" });
+
+  await expect(page.getByText("Please request cancellation within 24 hours of placing the order.")).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "Request Cancellation" })).toHaveCount(2);
+
+  await page.locator('[data-customer-order-id="cancel-pending-001"] [data-request-cancellation]').click();
+  const modal = page.locator("[data-cancellation-modal]");
+  await expect(modal).toHaveClass(/is-open/);
+  await expect(modal).toContainText("cancel-pending-001");
+  await expect(modal).toContainText("Cash on Delivery");
+  await expect(modal).toContainText("Submitting this request does not immediately cancel your order. It must be approved by the store administrator.");
+
+  await modal.locator("[data-cancellation-reason]").fill("no");
+  await modal.getByRole("button", { name: "Submit Cancellation Request" }).click();
+  await expect(modal.getByText("Reason must be between 5 and 300 characters.")).toBeVisible();
+
+  await modal.locator("[data-cancellation-reason]").fill("Ordered the wrong boot size");
+  await modal.locator("[data-cancellation-form]").evaluate((form) => {
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+
+  const pendingCard = page.locator('[data-customer-order-id="cancel-pending-001"]');
+  const pendingSummary = pendingCard.locator('[data-customer-cancellation-state="Pending"]');
+  await expect(pendingSummary).toContainText("Cancellation Request");
+  await expect(pendingSummary).toContainText("Awaiting Approval");
+  await expect(pendingSummary).not.toContainText("Ordered the wrong boot size");
+  await expect(pendingSummary).not.toContainText("Requested At");
+  await expect(pendingCard.locator("[data-request-cancellation]")).toHaveCount(0);
+
+  await pendingCard.getByRole("button", { name: "View Details" }).click();
+  const detailsModal = page.locator("[data-order-details-modal]");
+  await expect(detailsModal).toHaveClass(/is-open/);
+  await expect(detailsModal).toContainText("Customer Reason");
+  await expect(detailsModal).toContainText("Ordered the wrong boot size");
+  await expect(detailsModal).toContainText("Requested At");
+  await expect(detailsModal).toContainText("Your cancellation request is awaiting administrator approval.");
+  await detailsModal.getByRole("button", { name: "Close order details" }).click();
+
+  const state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(state.cancellationRequestCalls).toEqual([{
+    p_order_id: "cancel-pending-001",
+    p_reason: "Ordered the wrong boot size",
+  }]);
+  expect(state.updates).toEqual([]);
+
+  await page.locator('[data-customer-order-id="cancel-confirmed-002"] [data-request-cancellation]').click();
+  await expect(modal).toHaveClass(/is-open/);
+  await page.keyboard.press("Escape");
+  await expect(modal).not.toHaveClass(/is-open/);
+  await expect(page.locator("body")).not.toHaveClass(/no-scroll/);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('[data-customer-order-id="cancel-confirmed-002"] [data-request-cancellation]').click();
+  await expectNoHorizontalOverflow(page);
+  await expectInViewport(modal.locator(".order-cancellation-panel"), 390, 844);
+  await modal.getByRole("button", { name: "Close cancellation request" }).click();
+});
+
+test("failed cancellation requests keep the order eligible and hide database errors", async ({ page }) => {
+  const user = { id: "cancellation-error-user", email: "error@example.com", user_metadata: {} };
+  await installSupabaseStub(page, {
+    user,
+    failCancellationRequest: "private postgres cancellation detail",
+    orders: [{
+      id: "cancel-error-order",
+      user_id: user.id,
+      created_at: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+      total_amount: 89.99,
+      status: "Pending",
+      payment_method: "COD",
+      payment_status: "Unpaid",
+      cancellation_request_status: "None",
+      order_items: [{ product_price: 89.99, quantity: 1 }],
+    }],
+  });
+  await page.goto("/my-orders.html", { waitUntil: "domcontentloaded" });
+
+  await page.getByRole("button", { name: "Request Cancellation" }).click();
+  const modal = page.locator("[data-cancellation-modal]");
+  await modal.locator("[data-cancellation-reason]").fill("I selected the wrong product");
+  await modal.getByRole("button", { name: "Submit Cancellation Request" }).click();
+
+  await expect(modal.getByText("We could not submit your cancellation request. Please try again.")).toBeVisible();
+  await expect(modal.getByText("private postgres cancellation detail")).toHaveCount(0);
+  await expect(modal.getByRole("button", { name: "Submit Cancellation Request" })).toBeEnabled();
+  await modal.getByRole("button", { name: "Keep Order" }).click();
+  await expect(page.getByRole("button", { name: "Request Cancellation" })).toBeVisible();
+});
+
+test("my orders enforces expiry payment fulfilment and reviewed cancellation states", async ({ page }) => {
+  const user = { id: "cancellation-states", email: "states@example.com", user_metadata: {} };
+  const recent = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+  const expired = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+  const longReason = "I need to cancel because the selected product and delivery plan no longer match the intended team order, and this longer explanation must wrap safely inside the details panel without widening the page.";
+  const longAdminResponse = "The request was reviewed after fulfilment preparation started. Please contact support so the team can explain the available assistance without exposing any internal order controls.";
+  const base = {
+    user_id: user.id,
+    total_amount: 49.99,
+    payment_method: "COD",
+    payment_status: "Unpaid",
+    cancellation_request_status: "None",
+    order_items: [{ product_price: 49.99, quantity: 1 }],
+  };
+  await installSupabaseStub(page, {
+    user,
+    orders: [
+      { ...base, id: "expired-order", created_at: expired, status: "Pending" },
+      { ...base, id: "paid-order", created_at: recent, status: "Confirmed", payment_status: "Paid" },
+      { ...base, id: "shipped-order", created_at: recent, status: "Shipped" },
+      { ...base, id: "delivered-order", created_at: recent, status: "Delivered" },
+      { ...base, id: "pending-request-order", created_at: recent, status: "Pending", cancellation_request_status: "Pending", cancellation_reason: "Awaiting review", cancellation_requested_at: recent },
+      { ...base, id: "cancelled-order", created_at: recent, status: "Cancelled", cancellation_request_status: "Approved", cancellation_reason: "No longer needed", cancellation_requested_at: recent, cancelled_at: recent },
+      { ...base, id: "rejected-order", created_at: recent, status: "Confirmed", cancellation_request_status: "Rejected", cancellation_reason: longReason, cancellation_requested_at: recent, cancellation_admin_note: longAdminResponse, cancellation_reviewed_at: recent },
+    ],
+  });
+  await page.goto("/my-orders.html", { waitUntil: "domcontentloaded" });
+
+  await expect(page.locator('[data-customer-order-id="expired-order"]')).toContainText("The 24-hour cancellation window has closed. Please contact support for assistance.");
+  await expect(page.locator('[data-customer-order-id="paid-order"]')).toContainText("Paid orders require support assistance.");
+  await expect(page.locator('[data-customer-order-id="shipped-order"]')).toContainText("This order can no longer be cancelled.");
+  await expect(page.locator('[data-customer-order-id="delivered-order"]')).toContainText("This order can no longer be cancelled.");
+  const approvedCard = page.locator('[data-customer-order-id="cancelled-order"]');
+  const approvedSummary = approvedCard.locator('[data-customer-cancellation-state="Approved"]');
+  await expect(approvedCard.locator(".order-status")).toHaveText("Cancelled");
+  await expect(approvedSummary).toContainText("Cancellation Request");
+  await expect(approvedSummary).toContainText("Approved");
+  await expect(approvedSummary).not.toContainText("No longer needed");
+  await expect(approvedSummary).not.toContainText("Cancelled At");
+
+  const rejectedCard = page.locator('[data-customer-order-id="rejected-order"]');
+  const rejectedSummary = rejectedCard.locator('[data-customer-cancellation-state="Rejected"]');
+  await expect(rejectedCard.locator(".order-status")).toHaveText("Confirmed");
+  await expect(rejectedSummary).toContainText("Cancellation Request");
+  await expect(rejectedSummary).toContainText("Rejected");
+  await expect(rejectedSummary).not.toContainText(longReason);
+  await expect(rejectedSummary).not.toContainText(longAdminResponse);
+  await expect(rejectedSummary).not.toContainText("contact support");
+
+  const cancellationCardIds = ["pending-request-order", "cancelled-order", "rejected-order"];
+  for (const viewport of [{ width: 1391, height: 871 }, { width: 1440, height: 900 }]) {
+    await page.setViewportSize(viewport);
+    await expectNoHorizontalOverflow(page);
+    const measurements = await page.evaluate((orderIds) => orderIds.map((orderId) => {
+      const card = document.querySelector(`[data-customer-order-id="${orderId}"]`);
+      const orderLabel = card.querySelector(".customer-order-card__label--order").getBoundingClientRect();
+      const productsLabel = card.querySelector(".customer-order-card__label--products").getBoundingClientRect();
+      const productsValue = card.querySelector(".customer-order-card__metric--products").getBoundingClientRect();
+      const cancellationLabel = card.querySelector(".customer-cancellation-heading .order-card-label").getBoundingClientRect();
+      const cancellationBadge = card.querySelector(".customer-cancellation-heading .cancellation-state").getBoundingClientRect();
+      return {
+        orderLabelLeft: orderLabel.left,
+        productsLabelLeft: productsLabel.left,
+        productsValueLeft: productsValue.left,
+        cancellationLabelLeft: cancellationLabel.left,
+        cancellationBadgeLeft: cancellationBadge.left,
+      };
+    }), cancellationCardIds);
+
+    for (const measurement of measurements) {
+      expect(Math.abs(measurement.cancellationLabelLeft - measurement.orderLabelLeft)).toBeLessThanOrEqual(1);
+      expect(Math.abs(measurement.cancellationBadgeLeft - measurement.productsLabelLeft)).toBeLessThanOrEqual(1);
+      expect(Math.abs(measurement.cancellationBadgeLeft - measurement.productsValueLeft)).toBeLessThanOrEqual(1);
+    }
+    expect(Math.max(...measurements.map((entry) => entry.cancellationBadgeLeft)) - Math.min(...measurements.map((entry) => entry.cancellationBadgeLeft))).toBeLessThanOrEqual(1);
+  }
+
+  for (const viewport of [{ width: 430, height: 932 }, { width: 390, height: 844 }]) {
+    await page.setViewportSize(viewport);
+    await expectNoHorizontalOverflow(page);
+    const mobileLayout = await page.evaluate((orderIds) => orderIds.map((orderId) => {
+      const heading = document.querySelector(`[data-customer-order-id="${orderId}"] .customer-cancellation-heading`);
+      const label = heading.querySelector(".order-card-label").getBoundingClientRect();
+      const badge = heading.querySelector(".cancellation-state").getBoundingClientRect();
+      return {
+        flexDirection: getComputedStyle(heading).flexDirection,
+        labelBottom: label.bottom,
+        labelLeft: label.left,
+        badgeTop: badge.top,
+        badgeLeft: badge.left,
+      };
+    }), cancellationCardIds);
+    for (const measurement of mobileLayout) {
+      expect(measurement.flexDirection).toBe("column");
+      expect(measurement.badgeTop).toBeGreaterThanOrEqual(measurement.labelBottom - 1);
+      expect(Math.abs(measurement.badgeLeft - measurement.labelLeft)).toBeLessThanOrEqual(1);
+    }
+  }
+
+  await rejectedCard.getByRole("button", { name: "View Details" }).click();
+  const detailsModal = page.locator("[data-order-details-modal]");
+  await expect(detailsModal).toContainText("Customer Reason");
+  await expect(detailsModal).toContainText(longReason);
+  await expect(detailsModal).toContainText("Requested At");
+  await expect(detailsModal).toContainText("Reviewed At");
+  await expect(detailsModal).toContainText("Admin Response");
+  await expect(detailsModal).toContainText(longAdminResponse);
+  await expect(detailsModal).toContainText("Your cancellation request has been reviewed. Please contact support for further assistance.");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoHorizontalOverflow(page);
+  await detailsModal.getByRole("button", { name: "Close order details" }).click();
+
+  await page.setViewportSize({ width: 1391, height: 871 });
+  await expectNoHorizontalOverflow(page);
+  await approvedCard.getByRole("button", { name: "View Details" }).click();
+  await expect(detailsModal).toContainText("Customer Reason");
+  await expect(detailsModal).toContainText("No longer needed");
+  await expect(detailsModal).toContainText("Requested At");
+  await expect(detailsModal).toContainText("Cancelled At");
+  await detailsModal.getByRole("button", { name: "Close order details" }).click();
+  await expect(page.getByRole("button", { name: "Request Cancellation" })).toHaveCount(0);
+});
+
+test("admin reviews cancellations and locks order and payment controls safely", async ({ page }) => {
+  const recent = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+  const pendingCancellation = (id, status) => ({
+    id,
+    created_at: recent,
+    customer_name: "Cancellation Customer",
+    customer_email: "cancel@example.com",
+    customer_phone: "+91 90000 12345",
+    address: "12 Pitch Road",
+    city: "Kolkata",
+    state: "West Bengal",
+    pin_code: "700001",
+    total_amount: 219.99,
+    status,
+    payment_method: "COD",
+    payment_status: "Unpaid",
+    cancellation_request_status: "Pending",
+    cancellation_reason: "Ordered the wrong product",
+    cancellation_requested_at: recent,
+    order_items: [],
+  });
+  await installSupabaseStub(page, {
+    isAdmin: true,
+    user: { id: "admin-user", email: "ag203328@gmail.com", user_metadata: { full_name: "Admin" } },
+    orders: [
+      pendingCancellation("approve-cancellation", "Pending"),
+      pendingCancellation("reject-cancellation", "Confirmed"),
+    ],
+  });
+  await page.goto("/admin.html", { waitUntil: "domcontentloaded" });
+
+  let approveCard = page.locator('[data-order-id="approve-cancellation"]');
+  let rejectCard = page.locator('[data-order-id="reject-cancellation"]');
+  await expect(approveCard.getByText("Awaiting Approval")).toBeVisible();
+  await expect(approveCard.locator("[data-admin-status]")).toBeDisabled();
+  await expect(approveCard.locator("[data-admin-payment-status]")).toBeDisabled();
+  await expect(approveCard).toContainText("Review the pending cancellation request first.");
+
+  await rejectCard.getByRole("button", { name: "Reject Cancellation" }).click();
+  await expect(rejectCard.getByText("Please provide a clear rejection explanation.")).toBeVisible();
+  await rejectCard.locator("[data-admin-cancellation-note]").fill("Customer request is outside fulfilment handling rules");
+  await rejectCard.getByRole("button", { name: "Reject Cancellation" }).click();
+
+  rejectCard = page.locator('[data-order-id="reject-cancellation"]');
+  await expect(rejectCard.getByText("Rejected", { exact: true })).toBeVisible();
+  await expect(rejectCard.locator("[data-admin-status]")).toBeEnabled();
+  await expect(rejectCard.locator("[data-admin-payment-status]")).toBeEnabled();
+  await expect(rejectCard.locator('[data-admin-status] option[value="Cancelled"]')).toHaveCount(0);
+  await expect(rejectCard.locator("[data-admin-current-status]")).toHaveText("Confirmed");
+
+  approveCard = page.locator('[data-order-id="approve-cancellation"]');
+  await approveCard.getByRole("button", { name: "Approve Cancellation" }).click();
+  approveCard = page.locator('[data-order-id="approve-cancellation"]');
+  await expect(approveCard.getByText("Approved", { exact: true })).toBeVisible();
+  await expect(approveCard.locator("[data-admin-current-status]")).toHaveText("Cancelled");
+  await expect(approveCard.locator("[data-admin-status]")).toBeDisabled();
+  await expect(approveCard.locator("[data-admin-payment-status]")).toBeDisabled();
+  await expect(approveCard.locator("[data-admin-status-save]")).toBeDisabled();
+  await expect(approveCard.locator("[data-admin-payment-status-save]")).toBeDisabled();
+
+  const state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(state.cancellationReviewCalls).toEqual([
+    {
+      p_order_id: "reject-cancellation",
+      p_decision: "Rejected",
+      p_admin_note: "Customer request is outside fulfilment handling rules",
+    },
+    {
+      p_order_id: "approve-cancellation",
+      p_decision: "Approved",
+      p_admin_note: null,
+    },
+  ]);
+  expect(state.updates).toEqual([]);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoHorizontalOverflow(page);
+});
+
 test("my orders keeps the loading state until auth resolves, then requires login", async ({ page }) => {
   await installSupabaseStub(page, { user: null, sessionDelay: 250 });
   await page.goto("/my-orders.html", { waitUntil: "domcontentloaded" });
@@ -2637,6 +3014,8 @@ test("order writes are RPC-only in the frontend source", async () => {
   expect(source).toContain('supabaseClient.rpc("place_order"');
   expect(source).toContain('supabaseClient.rpc("update_order_status"');
   expect(source).toContain('supabaseClient.rpc("update_order_payment_status"');
+  expect(source).toContain('supabaseClient.rpc("request_order_cancellation"');
+  expect(source).toContain('supabaseClient.rpc("review_order_cancellation"');
   expect(source).not.toMatch(/\.from\(["']orders["']\)\s*\.insert\s*\(/s);
   expect(source).not.toMatch(/\.from\(["']order_items["']\)\s*\.insert\s*\(/s);
   expect(source).not.toMatch(/\.from\(["']orders["']\)\s*\.update\s*\(/s);

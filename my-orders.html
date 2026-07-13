@@ -181,6 +181,40 @@
     </section>
   </div>
 
+  <div class="order-cancellation-modal" data-cancellation-modal aria-hidden="true">
+    <section class="order-cancellation-panel" role="dialog" aria-modal="true" aria-labelledby="cancellation-title">
+      <header class="order-cancellation-header">
+        <div>
+          <p class="eyebrow lime">Cancellation Request</p>
+          <h2 id="cancellation-title">Request Cancellation</h2>
+        </div>
+        <button class="close-btn" type="button" data-close-cancellation aria-label="Close cancellation request">×</button>
+      </header>
+
+      <div class="order-cancellation-summary">
+        <div><span>Order ID</span><strong data-cancellation-order-id></strong></div>
+        <div><span>Order Date</span><strong data-cancellation-order-date></strong></div>
+        <div><span>Current Status</span><strong data-cancellation-order-status></strong></div>
+        <div><span>Order Total</span><strong data-cancellation-order-total></strong></div>
+        <div><span>Payment Method</span><strong data-cancellation-payment-method></strong></div>
+        <div><span>Cancellation Deadline</span><strong data-cancellation-deadline></strong></div>
+      </div>
+
+      <p class="order-cancellation-warning">Submitting this request does not immediately cancel your order. It must be approved by the store administrator.</p>
+
+      <form class="order-cancellation-form" data-cancellation-form novalidate>
+        <label for="cancellation-reason">Reason for cancellation</label>
+        <textarea id="cancellation-reason" name="cancellation-reason" data-cancellation-reason minlength="5" maxlength="300" required placeholder="Tell us why you would like to cancel this order"></textarea>
+        <small>Enter between 5 and 300 characters.</small>
+        <p class="order-cancellation-error" data-cancellation-error role="alert" hidden></p>
+        <div class="order-cancellation-actions">
+          <button class="order-cancellation-keep" type="button" data-keep-order>Keep Order</button>
+          <button class="order-cancellation-submit" type="submit" data-submit-cancellation>Submit Cancellation Request</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="script.js" defer></script>
 </body>

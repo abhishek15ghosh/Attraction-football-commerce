@@ -85,6 +85,8 @@
   let wishlistMutationQueue = Promise.resolve();
   let customerOrders = [];
   let myOrdersLoadVersion = 0;
+  let activeCancellationOrderId = null;
+  let cancellationRequestSubmitting = false;
 
   const productCards = $$(".product-card");
   const cartButton = $(".cart-button");
@@ -101,7 +103,10 @@
 
   const money = (number) => `${Number(number).toFixed(2)}`;
   const ORDER_STATUSES = ["Pending", "Confirmed", "Shipped", "Delivered", "Cancelled"];
+  const ADMIN_ORDER_STATUSES = ["Pending", "Confirmed", "Shipped", "Delivered"];
   const PAYMENT_STATUSES = ["Unpaid", "Paid"];
+  const CANCELLATION_REQUEST_STATUSES = ["None", "Pending", "Approved", "Rejected"];
+  const CANCELLATION_WINDOW_MS = 24 * 60 * 60 * 1000;
 
   const slugify = (text) =>
     text
@@ -1271,6 +1276,68 @@
     return PAYMENT_STATUSES.includes(value) ? value : "Unpaid";
   }
 
+  function getCancellationRequestStatus(value) {
+    return CANCELLATION_REQUEST_STATUSES.includes(value) ? value : "None";
+  }
+
+  function getCancellationDeadline(order) {
+    const createdAt = new Date(order?.created_at || "");
+    if (Number.isNaN(createdAt.getTime())) return null;
+    return new Date(createdAt.getTime() + CANCELLATION_WINDOW_MS);
+  }
+
+  function getCancellationEligibility(order) {
+    const requestStatus = getCancellationRequestStatus(order?.cancellation_request_status);
+    if (requestStatus !== "None") return { eligible: false, reason: requestStatus.toLowerCase() };
+    if (!["Pending", "Confirmed"].includes(order?.status)) return { eligible: false, reason: "order-status" };
+    if (order?.payment_method !== "COD") return { eligible: false, reason: "payment-method" };
+    if (getOrderPaymentStatus(order?.payment_status) !== "Unpaid") return { eligible: false, reason: "paid" };
+
+    const deadline = getCancellationDeadline(order);
+    if (!deadline || Date.now() >= deadline.getTime()) return { eligible: false, reason: "expired", deadline };
+    return { eligible: true, reason: "eligible", deadline };
+  }
+
+  function getCancellationStateLabel(status) {
+    return status === "Pending" ? "Awaiting Approval" : status;
+  }
+
+  function getCancellationRequestErrorMessage(error) {
+    const message = String(error?.message || "").toLowerCase();
+    if (message.includes("24") || message.includes("window") || message.includes("expired")) {
+      return "The 24-hour cancellation window has closed.";
+    }
+    if (message.includes("already") || message.includes("awaiting") || message.includes("pending request")) {
+      return "Your cancellation request is already awaiting approval.";
+    }
+    if (message.includes("paid") || message.includes("payment status")) {
+      return "Paid orders require support assistance.";
+    }
+    if (
+      message.includes("can no longer") ||
+      message.includes("not cancellable") ||
+      message.includes("order status") ||
+      message.includes("not eligible")
+    ) {
+      return "This order can no longer be cancelled.";
+    }
+    return "We could not submit your cancellation request. Please try again.";
+  }
+
+  function getCancellationReviewErrorMessage(error) {
+    const message = String(error?.message || "").toLowerCase();
+    if (message.includes("already") || message.includes("reviewed") || message.includes("not pending")) {
+      return "This cancellation request has already been reviewed.";
+    }
+    if (message.includes("24") || message.includes("window")) {
+      return "The 24-hour cancellation window has closed.";
+    }
+    if (message.includes("paid") || message.includes("payment")) {
+      return "This cancellation cannot be approved because the payment state changed. Reject it with an explanation.";
+    }
+    return "The cancellation request could not be reviewed. Please try again.";
+  }
+
   function renderAdminOrders(page, orders) {
     const container = $("[data-admin-orders]", page);
     const count = $("[data-admin-order-count]", page);
@@ -1287,9 +1354,14 @@
         const items = order.order_items || [];
         const address = [order.address, order.city, order.state, order.pin_code].filter(Boolean).join(", ");
         const status = order.status || "Pending";
-        const statusOptions = ORDER_STATUSES.map(
-          (option) => `<option value="${option}" ${option === status ? "selected" : ""}>${option}</option>`
-        ).join("");
+        const cancellationStatus = getCancellationRequestStatus(order.cancellation_request_status);
+        const controlsBlocked = cancellationStatus === "Pending" || cancellationStatus === "Approved" || status === "Cancelled";
+        const controlDisabled = controlsBlocked ? "disabled aria-disabled=\"true\"" : "";
+        const statusOptions = status === "Cancelled"
+          ? `<option value="Cancelled" selected>Cancelled</option>`
+          : ADMIN_ORDER_STATUSES.map(
+            (option) => `<option value="${option}" ${option === status ? "selected" : ""}>${option}</option>`
+          ).join("");
         const paymentStatus = getOrderPaymentStatus(order.payment_status);
         const paymentStatusOptions = PAYMENT_STATUSES.map(
           (option) => `<option value="${option}" ${option === paymentStatus ? "selected" : ""}>${option}</option>`
@@ -1297,6 +1369,43 @@
         const paymentCollectedAt = order.payment_collected_at
           ? formatOrderDate(order.payment_collected_at)
           : "";
+        const cancellationRequestedAt = order.cancellation_requested_at
+          ? formatOrderDate(order.cancellation_requested_at)
+          : "Not available";
+        const cancellationReviewedAt = order.cancellation_reviewed_at
+          ? formatOrderDate(order.cancellation_reviewed_at)
+          : "Not reviewed";
+        const cancellationDeadline = getCancellationDeadline(order);
+        const cancellationDeadlineLabel = cancellationDeadline
+          ? formatOrderDate(cancellationDeadline.toISOString())
+          : "Not available";
+        const cancellationControlMessage = cancellationStatus === "Pending"
+          ? "Review the pending cancellation request first."
+          : controlsBlocked
+            ? "Order and payment controls are unavailable for a cancelled order."
+            : "";
+        const cancellationDetails = cancellationStatus === "None"
+          ? `<p class="admin-cancellation-empty">No cancellation request for this order.</p>`
+          : `
+              <div class="admin-cancellation-grid">
+                <div><span class="admin-kicker">Customer Reason</span><p>${escapeHTML(order.cancellation_reason || "Not available")}</p></div>
+                <div><span class="admin-kicker">Requested</span><p>${escapeHTML(cancellationRequestedAt)}</p></div>
+                <div><span class="admin-kicker">24-Hour Deadline</span><p>${escapeHTML(cancellationDeadlineLabel)}</p></div>
+                <div><span class="admin-kicker">Reviewed</span><p>${escapeHTML(cancellationReviewedAt)}</p></div>
+                <div><span class="admin-kicker">Admin Note</span><p>${escapeHTML(order.cancellation_admin_note || "Not available")}</p></div>
+              </div>
+              ${cancellationStatus === "Pending" ? `
+                <div class="admin-cancellation-review" data-admin-cancellation-review>
+                  <label for="cancellation-note-${escapeHTML(order.id)}">Admin Note</label>
+                  <textarea id="cancellation-note-${escapeHTML(order.id)}" data-admin-cancellation-note maxlength="1000" placeholder="Required when rejecting the request"></textarea>
+                  <p class="admin-cancellation-feedback" data-admin-cancellation-feedback role="alert" hidden></p>
+                  <div class="admin-cancellation-actions">
+                    <button type="button" data-admin-cancellation-approve>Approve Cancellation</button>
+                    <button type="button" class="admin-cancellation-reject" data-admin-cancellation-reject>Reject Cancellation</button>
+                  </div>
+                </div>
+              ` : ""}
+            `;
         const itemsHtml = items
           .map((item) => {
             const price = Number(item.product_price || 0);
@@ -1326,18 +1435,19 @@
               <div class="admin-order-controls">
                 <div class="admin-status-control">
                   <label for="status-${escapeHTML(order.id)}">Order Status</label>
-                  <select id="status-${escapeHTML(order.id)}" data-admin-status>
+                  <select id="status-${escapeHTML(order.id)}" data-admin-status ${controlDisabled}>
                     ${statusOptions}
                   </select>
-                  <button type="button" data-admin-status-save>Save Status</button>
+                  <button type="button" data-admin-status-save ${controlDisabled}>Save Status</button>
                 </div>
                 <div class="admin-status-control admin-payment-status-control">
                   <label for="payment-status-${escapeHTML(order.id)}">Payment Status</label>
-                  <select id="payment-status-${escapeHTML(order.id)}" data-admin-payment-status>
+                  <select id="payment-status-${escapeHTML(order.id)}" data-admin-payment-status ${controlDisabled}>
                     ${paymentStatusOptions}
                   </select>
-                  <button type="button" data-admin-payment-status-save>Save Payment</button>
+                  <button type="button" data-admin-payment-status-save ${controlDisabled}>Save Payment</button>
                 </div>
+                ${cancellationControlMessage ? `<p class="admin-control-lock-message">${escapeHTML(cancellationControlMessage)}</p>` : ""}
               </div>
             </div>
             <div class="admin-order-grid">
@@ -1365,6 +1475,13 @@
               <span class="admin-kicker">Ordered Products</span>
               ${itemsHtml || `<p>No items found for this order.</p>`}
             </div>
+            <section class="admin-cancellation-panel" data-admin-cancellation-panel>
+              <div class="admin-cancellation-heading">
+                <div><span class="admin-kicker">Cancellation Request</span><h4>Customer Cancellation Review</h4></div>
+                <span class="cancellation-state cancellation-state--${cancellationStatus.toLowerCase()}">${escapeHTML(getCancellationStateLabel(cancellationStatus))}</span>
+              </div>
+              ${cancellationDetails}
+            </section>
           </article>
         `;
       })
@@ -1389,12 +1506,13 @@
   }
 
   async function updateAdminOrderStatus(page, button) {
+    if (button.disabled) return;
     const card = button.closest("[data-admin-order-card]");
     const select = $("[data-admin-status]", card);
     const statusLabel = $("[data-admin-current-status]", card);
     const orderId = card?.dataset.orderId;
     const status = select?.value;
-    if (!orderId || !ORDER_STATUSES.includes(status)) return;
+    if (!orderId || !ADMIN_ORDER_STATUSES.includes(status)) return;
 
     button.disabled = true;
     button.textContent = "Saving...";
@@ -1418,6 +1536,7 @@
   }
 
   async function updateAdminOrderPaymentStatus(page, button) {
+    if (button.disabled) return;
     const card = button.closest("[data-admin-order-card]");
     const select = $("[data-admin-payment-status]", card);
     const statusLabel = $("[data-admin-current-payment-status]", card);
@@ -1449,6 +1568,60 @@
     }
     button.disabled = false;
     button.textContent = "Save Payment";
+  }
+
+  function showAdminCancellationFeedback(card, message) {
+    const feedback = $("[data-admin-cancellation-feedback]", card);
+    if (!feedback) return;
+    feedback.textContent = message;
+    feedback.hidden = !message;
+  }
+
+  async function reviewAdminOrderCancellation(page, button, decision) {
+    const card = button.closest("[data-admin-order-card]");
+    const orderId = card?.dataset.orderId;
+    const note = $("[data-admin-cancellation-note]", card)?.value.trim() || "";
+    if (!card || !orderId || !["Approved", "Rejected"].includes(decision)) return;
+    if (card.dataset.cancellationSubmitting === "true") return;
+
+    showAdminCancellationFeedback(card, "");
+    if (decision === "Rejected" && note.length < 5) {
+      showAdminCancellationFeedback(card, "Please provide a clear rejection explanation.");
+      return;
+    }
+
+    card.dataset.cancellationSubmitting = "true";
+    const reviewButtons = $$(`[data-admin-cancellation-approve], [data-admin-cancellation-reject]`, card);
+    reviewButtons.forEach((reviewButton) => {
+      reviewButton.disabled = true;
+    });
+    const originalText = button.textContent;
+    button.textContent = decision === "Approved" ? "Approving..." : "Rejecting...";
+    hideAdminFeedback(page);
+
+    const { error } = await supabaseClient.rpc("review_order_cancellation", {
+      p_order_id: orderId,
+      p_decision: decision,
+      p_admin_note: note || null,
+    });
+
+    if (error) {
+      console.error("Cancellation review RPC failed", error);
+      showAdminCancellationFeedback(card, getCancellationReviewErrorMessage(error));
+      reviewButtons.forEach((reviewButton) => {
+        reviewButton.disabled = false;
+      });
+      button.textContent = originalText;
+      card.dataset.cancellationSubmitting = "false";
+      return;
+    }
+
+    await loadAdminOrders(page);
+    showAdminFeedback(
+      page,
+      "success",
+      `Cancellation request for order ${orderId} ${decision === "Approved" ? "approved" : "rejected"}.`
+    );
   }
 
   async function checkAdminAccess(page) {
@@ -1501,6 +1674,10 @@
       if (saveButton) updateAdminOrderStatus(page, saveButton);
       const paymentSaveButton = event.target.closest("[data-admin-payment-status-save]");
       if (paymentSaveButton) updateAdminOrderPaymentStatus(page, paymentSaveButton);
+      const approveCancellationButton = event.target.closest("[data-admin-cancellation-approve]");
+      if (approveCancellationButton) reviewAdminOrderCancellation(page, approveCancellationButton, "Approved");
+      const rejectCancellationButton = event.target.closest("[data-admin-cancellation-reject]");
+      if (rejectCancellationButton) reviewAdminOrderCancellation(page, rejectCancellationButton, "Rejected");
     });
     checkAdminAccess(page);
   }
@@ -1539,6 +1716,116 @@
     );
   }
 
+  function renderCustomerCancellationPanel(order, context = "card") {
+    const requestStatus = getCancellationRequestStatus(order.cancellation_request_status);
+    const eligibility = getCancellationEligibility(order);
+    const className = context === "details"
+      ? "order-details-cancellation customer-cancellation-panel"
+      : "customer-order-card__cancellation customer-cancellation-panel";
+    const stateLabel = getCancellationStateLabel(requestStatus);
+    const stateHeading = `
+      <div class="customer-cancellation-heading">
+        <span class="order-card-label">Cancellation Request</span>
+        <span class="cancellation-state cancellation-state--${requestStatus.toLowerCase()}">${escapeHTML(stateLabel)}</span>
+      </div>
+    `;
+
+    if (context === "card" && requestStatus !== "None") {
+      return `
+        <section class="${className}" data-customer-cancellation-state="${escapeHTML(requestStatus)}">
+          ${stateHeading}
+        </section>
+      `;
+    }
+
+    const reasonField = `
+      <div>
+        <span class="order-card-label">Customer Reason</span>
+        <p>${escapeHTML(order.cancellation_reason || "Not available")}</p>
+      </div>
+    `;
+    const requestedField = `
+      <div>
+        <span class="order-card-label">Requested At</span>
+        <p>${escapeHTML(formatOrderDate(order.cancellation_requested_at))}</p>
+      </div>
+    `;
+
+    if (requestStatus === "Pending") {
+      return `
+        <section class="${className}" data-customer-cancellation-state="Pending">
+          ${stateHeading}
+          <div class="customer-cancellation-details-grid">
+            ${reasonField}
+            ${requestedField}
+          </div>
+          <p class="customer-cancellation-guidance">Your cancellation request is awaiting administrator approval.</p>
+        </section>
+      `;
+    }
+
+    if (requestStatus === "Approved") {
+      return `
+        <section class="${className}" data-customer-cancellation-state="Approved">
+          ${stateHeading}
+          <div class="customer-cancellation-details-grid">
+            ${reasonField}
+            ${requestedField}
+            <div>
+              <span class="order-card-label">Cancelled At</span>
+              <p>${escapeHTML(formatOrderDate(order.cancelled_at))}</p>
+            </div>
+          </div>
+        </section>
+      `;
+    }
+
+    if (requestStatus === "Rejected") {
+      return `
+        <section class="${className}" data-customer-cancellation-state="Rejected">
+          ${stateHeading}
+          <div class="customer-cancellation-details-grid">
+            ${reasonField}
+            ${requestedField}
+            <div>
+              <span class="order-card-label">Reviewed At</span>
+              <p>${escapeHTML(formatOrderDate(order.cancellation_reviewed_at))}</p>
+            </div>
+            <div>
+              <span class="order-card-label">Admin Response</span>
+              <p>${escapeHTML(order.cancellation_admin_note || "Please contact support for more information.")}</p>
+            </div>
+          </div>
+          <p class="customer-cancellation-guidance">Your cancellation request has been reviewed. Please contact support for further assistance.</p>
+        </section>
+      `;
+    }
+
+    if (eligibility.eligible) {
+      return `
+        <section class="${className}" data-customer-cancellation-state="Eligible">
+          <div>
+            <span class="order-card-label">Cancellation</span>
+            <p>Please request cancellation within 24 hours of placing the order.</p>
+          </div>
+          <button type="button" class="customer-cancellation-button" data-request-cancellation data-order-id="${escapeHTML(order.id)}">Request Cancellation</button>
+        </section>
+      `;
+    }
+
+    const restrictionMessage = eligibility.reason === "expired"
+      ? "The 24-hour cancellation window has closed. Please contact support for assistance."
+      : eligibility.reason === "paid"
+        ? "Paid orders require support assistance."
+        : "This order can no longer be cancelled.";
+    return `
+      <section class="${className} customer-cancellation-panel--restricted" data-customer-cancellation-state="Restricted">
+        <span class="order-card-label">Cancellation</span>
+        <p>${escapeHTML(restrictionMessage)}</p>
+      </section>
+    `;
+  }
+
   function renderCustomerOrders(page) {
     const list = $("[data-orders-list]", page);
     if (!list) return;
@@ -1561,6 +1848,7 @@
             <span class="customer-order-card__primary customer-order-card__status-value order-status order-status--${status.toLowerCase()}">${escapeHTML(status)}</span>
             <button class="customer-order-card__primary customer-order-card__action-value customer-order-details-button" type="button" data-view-order-details>View Details</button>
             <p class="customer-order-card__date">${escapeHTML(formatOrderDate(order.created_at))}</p>
+            ${renderCustomerCancellationPanel(order)}
           </article>
         `;
       })
@@ -1624,6 +1912,7 @@
           ${paymentCollectedAt ? `<p>Payment Collected At: <strong>${escapeHTML(paymentCollectedAt)}</strong></p>` : ""}
         </section>
       </div>
+      ${renderCustomerCancellationPanel(order, "details")}
       <section class="order-details-items" aria-label="Ordered products">
         <span class="order-card-label">Ordered Products</span>
         ${itemsHtml || "<p>No products were found for this order.</p>"}
@@ -1655,10 +1944,137 @@
     document.body.classList.remove("no-scroll");
   }
 
+  function setCancellationFormError(message = "") {
+    const feedback = $("[data-cancellation-error]");
+    if (!feedback) return;
+    feedback.textContent = message;
+    feedback.hidden = !message;
+  }
+
+  function openCustomerCancellation(orderId) {
+    const order = customerOrders.find((entry) => String(entry.id) === String(orderId));
+    const modal = $("[data-cancellation-modal]");
+    if (!order || !modal) return;
+
+    const eligibility = getCancellationEligibility(order);
+    if (!eligibility.eligible) {
+      const message = eligibility.reason === "expired"
+        ? "The 24-hour cancellation window has closed."
+        : eligibility.reason === "paid"
+          ? "Paid orders require support assistance."
+          : eligibility.reason === "pending"
+            ? "Your cancellation request is already awaiting approval."
+            : "This order can no longer be cancelled.";
+      showToast(message);
+      return;
+    }
+
+    activeCancellationOrderId = String(order.id);
+    setCancellationFormError("");
+    const reason = $("[data-cancellation-reason]", modal);
+    const submit = $("[data-submit-cancellation]", modal);
+    if (reason) reason.value = "";
+    if (submit) {
+      submit.disabled = false;
+      submit.textContent = "Submit Cancellation Request";
+    }
+
+    const values = {
+      "[data-cancellation-order-id]": order.id,
+      "[data-cancellation-order-date]": formatOrderDate(order.created_at),
+      "[data-cancellation-order-status]": getCustomerOrderStatus(order.status),
+      "[data-cancellation-order-total]": formatCustomerOrderMoney(order.total_amount || 0),
+      "[data-cancellation-payment-method]": getOrderPaymentMethod(order.payment_method),
+      "[data-cancellation-deadline]": formatOrderDate(eligibility.deadline?.toISOString()),
+    };
+    Object.entries(values).forEach(([selector, value]) => {
+      const element = $(selector, modal);
+      if (element) element.textContent = value;
+    });
+
+    closeCustomerOrderDetails();
+    modal.classList.add("is-open");
+    modal.setAttribute("aria-hidden", "false");
+    document.body.classList.add("no-scroll");
+    window.setTimeout(() => reason?.focus(), 40);
+  }
+
+  function closeCustomerCancellation() {
+    const modal = $("[data-cancellation-modal]");
+    if (!modal?.classList.contains("is-open")) return;
+    modal.classList.remove("is-open");
+    modal.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("no-scroll");
+    activeCancellationOrderId = null;
+    setCancellationFormError("");
+  }
+
+  async function submitCustomerCancellation(form) {
+    if (cancellationRequestSubmitting) return;
+    const modal = form.closest("[data-cancellation-modal]");
+    const order = customerOrders.find(
+      (entry) => String(entry.id) === String(activeCancellationOrderId)
+    );
+    const reason = $("[data-cancellation-reason]", form)?.value.trim() || "";
+    const submit = $("[data-submit-cancellation]", form);
+
+    setCancellationFormError("");
+    if (!order) {
+      setCancellationFormError("This order can no longer be cancelled.");
+      return;
+    }
+    if (reason.length < 5 || reason.length > 300) {
+      setCancellationFormError("Reason must be between 5 and 300 characters.");
+      return;
+    }
+
+    const eligibility = getCancellationEligibility(order);
+    if (!eligibility.eligible) {
+      const message = eligibility.reason === "expired"
+        ? "The 24-hour cancellation window has closed."
+        : eligibility.reason === "paid"
+          ? "Paid orders require support assistance."
+          : eligibility.reason === "pending"
+            ? "Your cancellation request is already awaiting approval."
+            : "This order can no longer be cancelled.";
+      setCancellationFormError(message);
+      return;
+    }
+
+    cancellationRequestSubmitting = true;
+    if (submit) {
+      submit.disabled = true;
+      submit.textContent = "Submitting...";
+    }
+
+    const { error } = await supabaseClient.rpc("request_order_cancellation", {
+      p_order_id: order.id,
+      p_reason: reason,
+    });
+
+    if (error) {
+      console.error("Cancellation request RPC failed", error);
+      setCancellationFormError(getCancellationRequestErrorMessage(error));
+      cancellationRequestSubmitting = false;
+      if (submit) {
+        submit.disabled = false;
+        submit.textContent = "Submit Cancellation Request";
+      }
+      return;
+    }
+
+    cancellationRequestSubmitting = false;
+    closeCustomerCancellation();
+    showToast("Cancellation request submitted. Awaiting administrator approval.");
+    const page = $("[data-my-orders-page]");
+    if (page && authUser) await loadCustomerOrders(page, authUser.id);
+  }
+
   function resetCustomerOrdersForAuthChange() {
     myOrdersLoadVersion += 1;
     customerOrders = [];
     closeCustomerOrderDetails();
+    closeCustomerCancellation();
     const page = $("[data-my-orders-page]");
     const list = page && $("[data-orders-list]", page);
     if (list) list.innerHTML = "";
@@ -1671,7 +2087,7 @@
 
     const { data, error } = await supabaseClient
       .from("orders")
-      .select("id,user_id,customer_name,customer_email,customer_phone,address,city,state,pin_code,note,total_amount,status,payment_method,payment_status,payment_collected_at,created_at,order_items(id,order_id,product_id,product_name,product_category,product_price,quantity,product_image)")
+      .select("id,user_id,customer_name,customer_email,customer_phone,address,city,state,pin_code,note,total_amount,status,payment_method,payment_status,payment_collected_at,created_at,cancellation_request_status,cancellation_reason,cancellation_requested_at,cancellation_reviewed_at,cancellation_reviewed_by,cancellation_admin_note,cancelled_at,order_items(id,order_id,product_id,product_name,product_category,product_price,quantity,product_image)")
       .eq("user_id", userId)
       .order("created_at", { ascending: false });
 
@@ -1713,6 +2129,8 @@
   function initMyOrdersPage() {
     const page = $("[data-my-orders-page]");
     const modal = $("[data-order-details-modal]");
+    const cancellationModal = $("[data-cancellation-modal]");
+    const cancellationForm = $("[data-cancellation-form]", cancellationModal || document);
     if (!page || page.dataset.ordersBound === "true") return;
     page.dataset.ordersBound = "true";
 
@@ -1723,12 +2141,35 @@
       const detailsButton = event.target.closest("[data-view-order-details]");
       const card = detailsButton?.closest("[data-customer-order-id]");
       if (card) openCustomerOrderDetails(card.dataset.customerOrderId);
+
+      const cancellationButton = event.target.closest("[data-request-cancellation]");
+      if (cancellationButton) openCustomerCancellation(cancellationButton.dataset.orderId);
     });
 
     modal?.addEventListener("click", (event) => {
+      const cancellationButton = event.target.closest("[data-request-cancellation]");
+      if (cancellationButton) {
+        openCustomerCancellation(cancellationButton.dataset.orderId);
+        return;
+      }
       if (event.target === modal || event.target.closest("[data-close-order-details]")) {
         closeCustomerOrderDetails();
       }
+    });
+
+    cancellationModal?.addEventListener("click", (event) => {
+      if (
+        event.target === cancellationModal ||
+        event.target.closest("[data-close-cancellation]") ||
+        event.target.closest("[data-keep-order]")
+      ) {
+        closeCustomerCancellation();
+      }
+    });
+
+    cancellationForm?.addEventListener("submit", (event) => {
+      event.preventDefault();
+      submitCustomerCancellation(event.currentTarget);
     });
 
     refreshMyOrdersPageAccess();
@@ -3477,6 +3918,7 @@
         closeSearch();
         closeLogin();
         closeCustomerOrderDetails();
+        closeCustomerCancellation();
         closeCookiePreferences();
         closeMobileDrawer();
       }
