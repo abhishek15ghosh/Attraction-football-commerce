@@ -3257,13 +3257,23 @@ button {
 
 
 /* Admin orders */
+.admin-page {
+  --admin-content-gutter: 2px;
+}
+
+.admin-page .admin-hero,
+.admin-page .service-bar,
+.admin-page .site-footer {
+  margin-inline: var(--admin-content-gutter);
+}
+
 .admin-page .admin-hero {
   margin-bottom: 28px;
 }
 
 .admin-section {
-  width: min(100%, 1180px);
-  margin: 0 auto 36px;
+  width: auto;
+  margin: 0 var(--admin-content-gutter) 36px;
 }
 
 .admin-state,
