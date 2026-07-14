@@ -3,6 +3,26 @@ const path = require("node:path");
 const { expect, test } = require("@playwright/test");
 
 const screenshotDir = path.join(process.cwd(), "screenshots");
+const productCatalogueFixturePath = path.join(process.cwd(), "tests", "fixtures", "product-catalog-ids.json");
+const storefrontProductPages = new Map([
+  ["index.html", 16],
+  ["products.html", 16],
+  ["football-shoes.html", 20],
+  ["jerseys.html", 20],
+  ["t-shirts.html", 20],
+  ["footballs.html", 20],
+  ["accessories.html", 20],
+]);
+
+function readStaticProductCards(fileName) {
+  const html = fs.readFileSync(path.join(process.cwd(), fileName), "utf8");
+  return [...html.matchAll(/<article\b([^>]*\bclass="[^"]*\bproduct-card\b[^"]*"[^>]*)>([\s\S]*?)<\/article>/g)]
+    .map((match) => ({
+      fileName,
+      id: match[1].match(/\bdata-product-id="([^"]*)"/)?.[1]?.trim() || "",
+      name: match[2].match(/<h3[^>]*>([\s\S]*?)<\/h3>/)?.[1]?.replace(/<[^>]+>/g, "").trim() || "",
+    }));
+}
 
 async function expectNoHorizontalOverflow(page) {
   const sizes = await page.evaluate(() => ({
@@ -625,6 +645,122 @@ test.beforeEach(async ({ page }) => {
     localStorage.setItem("attractionCookieConsent", "accepted");
     document.querySelector("[data-cookie-banner]")?.classList.remove("is-visible");
   });
+});
+
+test("all storefront product cards use verified immutable catalogue IDs", async () => {
+  const catalogueIdList = JSON.parse(fs.readFileSync(productCatalogueFixturePath, "utf8"));
+  const catalogueIds = new Set(catalogueIdList);
+  const occurrences = [];
+
+  for (const [fileName, expectedCount] of storefrontProductPages) {
+    const cards = readStaticProductCards(fileName);
+    expect(cards, `${fileName} product-card count`).toHaveLength(expectedCount);
+    occurrences.push(...cards);
+  }
+
+  expect(catalogueIdList).toHaveLength(105);
+  expect(catalogueIds.size).toBe(105);
+  expect(catalogueIdList).toEqual([...catalogueIdList].sort());
+  expect(occurrences).toHaveLength(132);
+  expect(occurrences.filter((card) => !card.id)).toEqual([]);
+
+  const storefrontIds = new Set(occurrences.map((card) => card.id));
+  expect(storefrontIds.size).toBe(105);
+  expect([...storefrontIds].filter((id) => !catalogueIds.has(id))).toEqual([]);
+  expect([...catalogueIds].filter((id) => !storefrontIds.has(id))).toEqual([]);
+
+  const idsByName = new Map();
+  occurrences.forEach(({ name, id }) => {
+    if (!idsByName.has(name)) idsByName.set(name, new Set());
+    idsByName.get(name).add(id);
+  });
+  expect([...idsByName.entries()].filter(([, ids]) => ids.size > 1)).toEqual([]);
+
+  for (const productId of [
+    "predator-elite-fg",
+    "velocity-grip-sg",
+    "premier-match-ball",
+    "matchday-travel-tee",
+    "pro-grip-gloves",
+  ]) {
+    const repeatedCards = occurrences.filter((card) => card.id === productId);
+    expect(repeatedCards.length, `${productId} should appear on multiple pages`).toBeGreaterThan(1);
+    expect(new Set(repeatedCards.map((card) => card.id))).toEqual(new Set([productId]));
+  }
+
+  const source = fs.readFileSync(path.join(process.cwd(), "script.js"), "utf8");
+  expect(source).toContain("card.dataset.productId");
+  expect(source).toContain("product_id: item.id");
+  expect(source).not.toContain("slugify");
+  expect(source).not.toMatch(/card\.dataset\.id\s*\|\|/);
+  expect(source).not.toMatch(/rawItem\.id\s*\|\|\s*slugify/);
+});
+
+test("cart and wishlist preserve representative explicit product-card IDs", async ({ page }) => {
+  await installSupabaseStub(page, { user: null });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+
+  const representativeIds = [
+    "predator-elite-fg",
+    "velocity-grip-sg",
+    "premier-match-ball",
+    "matchday-travel-tee",
+    "pro-grip-gloves",
+  ];
+  for (const productId of representativeIds) {
+    const card = page.locator(`.product-card[data-product-id="${productId}"]`);
+    await expect(card).toHaveCount(1);
+    await card.getByRole("button", { name: "Add to Cart" }).click();
+    await card.locator(".wish").click();
+  }
+
+  const guestData = await page.evaluate(() => ({
+    cart: JSON.parse(localStorage.getItem("attractionCart:guest") || "[]"),
+    wishlist: JSON.parse(localStorage.getItem("attractionWishlist:guest") || "[]"),
+  }));
+  expect(guestData.cart.map((item) => item.id).sort()).toEqual([...representativeIds].sort());
+  expect(guestData.wishlist.map((item) => item.id).sort()).toEqual([...representativeIds].sort());
+  expect(guestData.cart.every((item) => item.qty === 1)).toBe(true);
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator(".cart-count")).toHaveText("5");
+  await expect(page.locator(".wishlist-count")).toHaveText("5");
+});
+
+test("a product card missing data-product-id fails closed", async ({ page }) => {
+  await installSupabaseStub(page, { user: null });
+  const configurationErrors = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") configurationErrors.push(message.text());
+  });
+  await page.route("**/products.html", async (route) => {
+    const html = fs.readFileSync(path.join(process.cwd(), "products.html"), "utf8");
+    await route.fulfill({
+      contentType: "text/html",
+      body: html.replace(' data-product-id="predator-elite-fg"', ""),
+    });
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+
+  const card = page.locator(".product-card", { hasText: "Predator Elite FG" });
+  const cartButton = card.getByRole("button", { name: "Add to Cart" });
+  const wishlistButton = card.getByLabel("Add Predator Elite FG to wishlist");
+  await expect(cartButton).toBeDisabled();
+  await expect(cartButton).toHaveAttribute("aria-disabled", "true");
+  await expect(wishlistButton).toBeDisabled();
+  await expect(wishlistButton).toHaveAttribute("aria-disabled", "true");
+
+  await cartButton.evaluate((button) => button.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  await wishlistButton.evaluate((button) => button.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  await expect(page.locator(".cart-count")).toHaveText("0");
+  await expect(page.locator(".wishlist-count")).toHaveText("0");
+  expect(configurationErrors).toContain("Product card configuration error: missing data-product-id.");
+
+  const guestData = await page.evaluate(() => ({
+    cart: JSON.parse(localStorage.getItem("attractionCart:guest") || "[]"),
+    wishlist: JSON.parse(localStorage.getItem("attractionWishlist:guest") || "[]"),
+  }));
+  expect(guestData).toEqual({ cart: [], wishlist: [] });
 });
 
 test("cookie banner appears on first visit and saves consent preferences", async ({ page }) => {

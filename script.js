@@ -108,13 +108,6 @@
   const CANCELLATION_REQUEST_STATUSES = ["None", "Pending", "Approved", "Rejected"];
   const CANCELLATION_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-  const slugify = (text) =>
-    text
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/(^-|-$)/g, "");
-
   const escapeHTML = (value = "") =>
     String(value).replace(/[&<>"']/g, (character) => ({
       "&": "&amp;",
@@ -125,12 +118,26 @@
     })[character]);
 
   const normalizePrice = (value) => Number(String(value || "0").replace(/[^0-9.]/g, "")) || 0;
+  const PRODUCT_CARD_CONFIGURATION_ERROR = "Product card configuration error: missing data-product-id.";
+
+  function hasProductIdentity(product) {
+    if (String(product?.id || "").trim()) return true;
+    console.error(PRODUCT_CARD_CONFIGURATION_ERROR);
+    return false;
+  }
+
+  function disableProductCardCommerce(card) {
+    [$(".wish", card), $(".js-add-cart", card)].filter(Boolean).forEach((control) => {
+      control.disabled = true;
+      control.setAttribute("aria-disabled", "true");
+    });
+  }
 
   function getProductFromCard(card, index = 0) {
     const name = $("h3", card)?.textContent.trim() || `Product ${index + 1}`;
     const category = $("p", card)?.textContent.trim() || "Product";
     const price = normalizePrice($("strong", card)?.textContent || "0");
-    const id = card.dataset.id || slugify(name);
+    const id = String(card.dataset.productId || "").trim();
     const image = $("img", card)?.getAttribute("src") || "";
 
     return { id, name, category, price, image };
@@ -158,7 +165,7 @@
 
     items.forEach((rawItem) => {
       if (!rawItem || typeof rawItem !== "object") return;
-      const id = rawItem.id || slugify(rawItem.name || "");
+      const id = String(rawItem.id || "").trim();
       if (!id) return;
 
       const product = productLookup.get(id) || {};
@@ -197,7 +204,7 @@
       const rawItem = typeof item === "string" ? { id: item } : item;
       if (!rawItem || typeof rawItem !== "object") return;
 
-      const id = rawItem.id || slugify(rawItem.name || "");
+      const id = String(rawItem.id || "").trim();
       if (!id) return;
 
       const product = productLookup.get(id) || {};
@@ -1186,23 +1193,30 @@
       const product = getProductFromCard(card, index);
       const filter = card.dataset.filter || product.category;
 
-      card.dataset.id = product.id;
       card.dataset.index = String(index);
       card.dataset.name = product.name;
       card.dataset.category = product.category;
       card.dataset.filter = filter;
       card.dataset.price = String(product.price);
       card.dataset.image = product.image;
-      productLookup.set(product.id, product);
-
-      if (!$(`.js-add-cart`, card)) {
+      let addButton = $(`.js-add-cart`, card);
+      if (!addButton) {
         const button = document.createElement("button");
         button.className = "js-add-cart";
         button.type = "button";
         button.textContent = "Add to Cart";
-        button.addEventListener("click", () => addToCart(product));
         card.appendChild(button);
+        addButton = button;
       }
+
+      if (!product.id) {
+        console.error(PRODUCT_CARD_CONFIGURATION_ERROR);
+        disableProductCardCommerce(card);
+        return;
+      }
+
+      productLookup.set(product.id, product);
+      addButton.addEventListener("click", () => addToCart(product));
     });
   }
 
@@ -2336,7 +2350,7 @@
   function updateWishlistButtons() {
     $$(".wish").forEach((button) => {
       const card = button.closest(".product-card");
-      const id = button.dataset.wishlistId || card?.dataset.id;
+      const id = button.dataset.wishlistId || card?.dataset.productId || card?.dataset.wishlistId || button.dataset.wishlistRemove;
       if (!id) return;
       const active = isWishlisted(id);
       button.classList.toggle("is-active", active);
@@ -2364,6 +2378,7 @@
   }
 
   async function addToCart(product) {
+    if (!hasProductIdentity(product)) return;
     await waitForAuthReady();
     if (!authUser?.id) {
       const existing = cart.find((item) => item.id === product.id);
@@ -3099,6 +3114,7 @@
   }
 
   async function toggleWishlist(product) {
+    if (!hasProductIdentity(product)) return;
     await waitForAuthReady();
     const saved = isWishlisted(product.id);
 
@@ -3174,7 +3190,7 @@
     grid.innerHTML = wishlist
       .map(
         (item) => `
-          <article class="product-card catalog-card wishlist-product-card" data-wishlist-id="${escapeHTML(item.id)}">
+          <article class="product-card catalog-card wishlist-product-card" data-product-id="${escapeHTML(item.id)}" data-wishlist-id="${escapeHTML(item.id)}">
             <button class="wish is-active" type="button" data-wishlist-remove="${escapeHTML(item.id)}" aria-label="Remove ${escapeHTML(item.name)} from wishlist" aria-pressed="true">♥</button>
             <div class="product-image">
               <img class="wishlist-product-img" src="${escapeHTML(item.image || "assets/hero-football-boot.avif")}" alt="${escapeHTML(item.name)}" loading="lazy" decoding="async" />
@@ -3216,8 +3232,12 @@
     $$(".wish").forEach((button) => {
       if (button.dataset.wishlistBound === "true") return;
       const card = button.closest(".product-card");
-      const id = card?.dataset.id || button.dataset.wishlistRemove;
-      if (!id) return;
+      const id = card?.dataset.productId || card?.dataset.wishlistId || button.dataset.wishlistRemove;
+      if (!id) {
+        button.disabled = true;
+        button.setAttribute("aria-disabled", "true");
+        return;
+      }
 
       button.dataset.wishlistBound = "true";
       button.dataset.wishlistId = id;
