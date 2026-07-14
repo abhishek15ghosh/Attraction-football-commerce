@@ -1,0 +1,382 @@
+product_id,product_name,category,variant_label,sku,initial_stock_quantity,low_stock_threshold,product_is_active,variant_is_active
+academy-trainer-pro,Academy Trainer Pro,Football Shoes,UK 6,ATF-ACADEMY-TRAINER-PRO-UK6,10,3,true,true
+academy-trainer-pro,Academy Trainer Pro,Football Shoes,UK 7,ATF-ACADEMY-TRAINER-PRO-UK7,10,3,true,true
+academy-trainer-pro,Academy Trainer Pro,Football Shoes,UK 8,ATF-ACADEMY-TRAINER-PRO-UK8,10,3,true,true
+academy-trainer-pro,Academy Trainer Pro,Football Shoes,UK 9,ATF-ACADEMY-TRAINER-PRO-UK9,10,3,true,true
+academy-trainer-pro,Academy Trainer Pro,Football Shoes,UK 10,ATF-ACADEMY-TRAINER-PRO-UK10,10,3,true,true
+academy-trainer-pro,Academy Trainer Pro,Football Shoes,UK 11,ATF-ACADEMY-TRAINER-PRO-UK11,10,3,true,true
+aero-touch-academy,Aero Touch Academy,Football Shoes,UK 6,ATF-AERO-TOUCH-ACADEMY-UK6,10,3,true,true
+aero-touch-academy,Aero Touch Academy,Football Shoes,UK 7,ATF-AERO-TOUCH-ACADEMY-UK7,10,3,true,true
+aero-touch-academy,Aero Touch Academy,Football Shoes,UK 8,ATF-AERO-TOUCH-ACADEMY-UK8,10,3,true,true
+aero-touch-academy,Aero Touch Academy,Football Shoes,UK 9,ATF-AERO-TOUCH-ACADEMY-UK9,10,3,true,true
+aero-touch-academy,Aero Touch Academy,Football Shoes,UK 10,ATF-AERO-TOUCH-ACADEMY-UK10,10,3,true,true
+aero-touch-academy,Aero Touch Academy,Football Shoes,UK 11,ATF-AERO-TOUCH-ACADEMY-UK11,10,3,true,true
+carbon-speed-elite,Carbon Speed Elite,Football Shoes,UK 6,ATF-CARBON-SPEED-ELITE-UK6,10,3,true,true
+carbon-speed-elite,Carbon Speed Elite,Football Shoes,UK 7,ATF-CARBON-SPEED-ELITE-UK7,10,3,true,true
+carbon-speed-elite,Carbon Speed Elite,Football Shoes,UK 8,ATF-CARBON-SPEED-ELITE-UK8,10,3,true,true
+carbon-speed-elite,Carbon Speed Elite,Football Shoes,UK 9,ATF-CARBON-SPEED-ELITE-UK9,10,3,true,true
+carbon-speed-elite,Carbon Speed Elite,Football Shoes,UK 10,ATF-CARBON-SPEED-ELITE-UK10,10,3,true,true
+carbon-speed-elite,Carbon Speed Elite,Football Shoes,UK 11,ATF-CARBON-SPEED-ELITE-UK11,10,3,true,true
+classic-leather-fg,Classic Leather FG,Football Shoes,UK 6,ATF-CLASSIC-LEATHER-FG-UK6,10,3,true,true
+classic-leather-fg,Classic Leather FG,Football Shoes,UK 7,ATF-CLASSIC-LEATHER-FG-UK7,10,3,true,true
+classic-leather-fg,Classic Leather FG,Football Shoes,UK 8,ATF-CLASSIC-LEATHER-FG-UK8,10,3,true,true
+classic-leather-fg,Classic Leather FG,Football Shoes,UK 9,ATF-CLASSIC-LEATHER-FG-UK9,10,3,true,true
+classic-leather-fg,Classic Leather FG,Football Shoes,UK 10,ATF-CLASSIC-LEATHER-FG-UK10,10,3,true,true
+classic-leather-fg,Classic Leather FG,Football Shoes,UK 11,ATF-CLASSIC-LEATHER-FG-UK11,10,3,true,true
+control-collar-elite,Control Collar Elite,Football Shoes,UK 6,ATF-CONTROL-COLLAR-ELITE-UK6,10,3,true,true
+control-collar-elite,Control Collar Elite,Football Shoes,UK 7,ATF-CONTROL-COLLAR-ELITE-UK7,10,3,true,true
+control-collar-elite,Control Collar Elite,Football Shoes,UK 8,ATF-CONTROL-COLLAR-ELITE-UK8,10,3,true,true
+control-collar-elite,Control Collar Elite,Football Shoes,UK 9,ATF-CONTROL-COLLAR-ELITE-UK9,10,3,true,true
+control-collar-elite,Control Collar Elite,Football Shoes,UK 10,ATF-CONTROL-COLLAR-ELITE-UK10,10,3,true,true
+control-collar-elite,Control Collar Elite,Football Shoes,UK 11,ATF-CONTROL-COLLAR-ELITE-UK11,10,3,true,true
+control-pods-pro,Control Pods Pro,Football Shoes,UK 6,ATF-CONTROL-PODS-PRO-UK6,10,3,true,true
+control-pods-pro,Control Pods Pro,Football Shoes,UK 7,ATF-CONTROL-PODS-PRO-UK7,10,3,true,true
+control-pods-pro,Control Pods Pro,Football Shoes,UK 8,ATF-CONTROL-PODS-PRO-UK8,10,3,true,true
+control-pods-pro,Control Pods Pro,Football Shoes,UK 9,ATF-CONTROL-PODS-PRO-UK9,10,3,true,true
+control-pods-pro,Control Pods Pro,Football Shoes,UK 10,ATF-CONTROL-PODS-PRO-UK10,10,3,true,true
+control-pods-pro,Control Pods Pro,Football Shoes,UK 11,ATF-CONTROL-PODS-PRO-UK11,10,3,true,true
+daily-drill-trainer,Daily Drill Trainer,Football Shoes,UK 6,ATF-DAILY-DRILL-TRAINER-UK6,10,3,true,true
+daily-drill-trainer,Daily Drill Trainer,Football Shoes,UK 7,ATF-DAILY-DRILL-TRAINER-UK7,10,3,true,true
+daily-drill-trainer,Daily Drill Trainer,Football Shoes,UK 8,ATF-DAILY-DRILL-TRAINER-UK8,10,3,true,true
+daily-drill-trainer,Daily Drill Trainer,Football Shoes,UK 9,ATF-DAILY-DRILL-TRAINER-UK9,10,3,true,true
+daily-drill-trainer,Daily Drill Trainer,Football Shoes,UK 10,ATF-DAILY-DRILL-TRAINER-UK10,10,3,true,true
+daily-drill-trainer,Daily Drill Trainer,Football Shoes,UK 11,ATF-DAILY-DRILL-TRAINER-UK11,10,3,true,true
+graphite-power-fg,Graphite Power FG,Football Shoes,UK 6,ATF-GRAPHITE-POWER-FG-UK6,10,3,true,true
+graphite-power-fg,Graphite Power FG,Football Shoes,UK 7,ATF-GRAPHITE-POWER-FG-UK7,10,3,true,true
+graphite-power-fg,Graphite Power FG,Football Shoes,UK 8,ATF-GRAPHITE-POWER-FG-UK8,10,3,true,true
+graphite-power-fg,Graphite Power FG,Football Shoes,UK 9,ATF-GRAPHITE-POWER-FG-UK9,10,3,true,true
+graphite-power-fg,Graphite Power FG,Football Shoes,UK 10,ATF-GRAPHITE-POWER-FG-UK10,10,3,true,true
+graphite-power-fg,Graphite Power FG,Football Shoes,UK 11,ATF-GRAPHITE-POWER-FG-UK11,10,3,true,true
+maestro-white-control,Maestro White Control,Football Shoes,UK 6,ATF-MAESTRO-WHITE-CONTROL-UK6,10,3,true,true
+maestro-white-control,Maestro White Control,Football Shoes,UK 7,ATF-MAESTRO-WHITE-CONTROL-UK7,10,3,true,true
+maestro-white-control,Maestro White Control,Football Shoes,UK 8,ATF-MAESTRO-WHITE-CONTROL-UK8,10,3,true,true
+maestro-white-control,Maestro White Control,Football Shoes,UK 9,ATF-MAESTRO-WHITE-CONTROL-UK9,10,3,true,true
+maestro-white-control,Maestro White Control,Football Shoes,UK 10,ATF-MAESTRO-WHITE-CONTROL-UK10,10,3,true,true
+maestro-white-control,Maestro White Control,Football Shoes,UK 11,ATF-MAESTRO-WHITE-CONTROL-UK11,10,3,true,true
+nitro-sprint-laceless,Nitro Sprint Laceless,Football Shoes,UK 6,ATF-NITRO-SPRINT-LACELESS-UK6,10,3,true,true
+nitro-sprint-laceless,Nitro Sprint Laceless,Football Shoes,UK 7,ATF-NITRO-SPRINT-LACELESS-UK7,10,3,true,true
+nitro-sprint-laceless,Nitro Sprint Laceless,Football Shoes,UK 8,ATF-NITRO-SPRINT-LACELESS-UK8,10,3,true,true
+nitro-sprint-laceless,Nitro Sprint Laceless,Football Shoes,UK 9,ATF-NITRO-SPRINT-LACELESS-UK9,10,3,true,true
+nitro-sprint-laceless,Nitro Sprint Laceless,Football Shoes,UK 10,ATF-NITRO-SPRINT-LACELESS-UK10,10,3,true,true
+nitro-sprint-laceless,Nitro Sprint Laceless,Football Shoes,UK 11,ATF-NITRO-SPRINT-LACELESS-UK11,10,3,true,true
+omega-blade-speed,Omega Blade Speed,Football Shoes,UK 6,ATF-OMEGA-BLADE-SPEED-UK6,10,3,true,true
+omega-blade-speed,Omega Blade Speed,Football Shoes,UK 7,ATF-OMEGA-BLADE-SPEED-UK7,10,3,true,true
+omega-blade-speed,Omega Blade Speed,Football Shoes,UK 8,ATF-OMEGA-BLADE-SPEED-UK8,10,3,true,true
+omega-blade-speed,Omega Blade Speed,Football Shoes,UK 9,ATF-OMEGA-BLADE-SPEED-UK9,10,3,true,true
+omega-blade-speed,Omega Blade Speed,Football Shoes,UK 10,ATF-OMEGA-BLADE-SPEED-UK10,10,3,true,true
+omega-blade-speed,Omega Blade Speed,Football Shoes,UK 11,ATF-OMEGA-BLADE-SPEED-UK11,10,3,true,true
+phantom-control-pro,Phantom Control Pro,Football Shoes,UK 6,ATF-PHANTOM-CONTROL-PRO-UK6,10,3,true,true
+phantom-control-pro,Phantom Control Pro,Football Shoes,UK 7,ATF-PHANTOM-CONTROL-PRO-UK7,10,3,true,true
+phantom-control-pro,Phantom Control Pro,Football Shoes,UK 8,ATF-PHANTOM-CONTROL-PRO-UK8,10,3,true,true
+phantom-control-pro,Phantom Control Pro,Football Shoes,UK 9,ATF-PHANTOM-CONTROL-PRO-UK9,10,3,true,true
+phantom-control-pro,Phantom Control Pro,Football Shoes,UK 10,ATF-PHANTOM-CONTROL-PRO-UK10,10,3,true,true
+phantom-control-pro,Phantom Control Pro,Football Shoes,UK 11,ATF-PHANTOM-CONTROL-PRO-UK11,10,3,true,true
+predator-elite-fg,Predator Elite FG,Football Shoes,UK 6,ATF-PREDATOR-ELITE-FG-UK6,10,3,true,true
+predator-elite-fg,Predator Elite FG,Football Shoes,UK 7,ATF-PREDATOR-ELITE-FG-UK7,10,3,true,true
+predator-elite-fg,Predator Elite FG,Football Shoes,UK 8,ATF-PREDATOR-ELITE-FG-UK8,10,3,true,true
+predator-elite-fg,Predator Elite FG,Football Shoes,UK 9,ATF-PREDATOR-ELITE-FG-UK9,10,3,true,true
+predator-elite-fg,Predator Elite FG,Football Shoes,UK 10,ATF-PREDATOR-ELITE-FG-UK10,10,3,true,true
+predator-elite-fg,Predator Elite FG,Football Shoes,UK 11,ATF-PREDATOR-ELITE-FG-UK11,10,3,true,true
+shadow-touch-fg,Shadow Touch FG,Football Shoes,UK 6,ATF-SHADOW-TOUCH-FG-UK6,10,3,true,true
+shadow-touch-fg,Shadow Touch FG,Football Shoes,UK 7,ATF-SHADOW-TOUCH-FG-UK7,10,3,true,true
+shadow-touch-fg,Shadow Touch FG,Football Shoes,UK 8,ATF-SHADOW-TOUCH-FG-UK8,10,3,true,true
+shadow-touch-fg,Shadow Touch FG,Football Shoes,UK 9,ATF-SHADOW-TOUCH-FG-UK9,10,3,true,true
+shadow-touch-fg,Shadow Touch FG,Football Shoes,UK 10,ATF-SHADOW-TOUCH-FG-UK10,10,3,true,true
+shadow-touch-fg,Shadow Touch FG,Football Shoes,UK 11,ATF-SHADOW-TOUCH-FG-UK11,10,3,true,true
+sockfit-pro-fg,Sockfit Pro FG,Football Shoes,UK 6,ATF-SOCKFIT-PRO-FG-UK6,10,3,true,true
+sockfit-pro-fg,Sockfit Pro FG,Football Shoes,UK 7,ATF-SOCKFIT-PRO-FG-UK7,10,3,true,true
+sockfit-pro-fg,Sockfit Pro FG,Football Shoes,UK 8,ATF-SOCKFIT-PRO-FG-UK8,10,3,true,true
+sockfit-pro-fg,Sockfit Pro FG,Football Shoes,UK 9,ATF-SOCKFIT-PRO-FG-UK9,10,3,true,true
+sockfit-pro-fg,Sockfit Pro FG,Football Shoes,UK 10,ATF-SOCKFIT-PRO-FG-UK10,10,3,true,true
+sockfit-pro-fg,Sockfit Pro FG,Football Shoes,UK 11,ATF-SOCKFIT-PRO-FG-UK11,10,3,true,true
+street-cage-turf,Street Cage Turf,Football Shoes,UK 6,ATF-STREET-CAGE-TURF-UK6,10,3,true,true
+street-cage-turf,Street Cage Turf,Football Shoes,UK 7,ATF-STREET-CAGE-TURF-UK7,10,3,true,true
+street-cage-turf,Street Cage Turf,Football Shoes,UK 8,ATF-STREET-CAGE-TURF-UK8,10,3,true,true
+street-cage-turf,Street Cage Turf,Football Shoes,UK 9,ATF-STREET-CAGE-TURF-UK9,10,3,true,true
+street-cage-turf,Street Cage Turf,Football Shoes,UK 10,ATF-STREET-CAGE-TURF-UK10,10,3,true,true
+street-cage-turf,Street Cage Turf,Football Shoes,UK 11,ATF-STREET-CAGE-TURF-UK11,10,3,true,true
+training-strike-tf,Training Strike TF,Football Shoes,UK 6,ATF-TRAINING-STRIKE-TF-UK6,10,3,true,true
+training-strike-tf,Training Strike TF,Football Shoes,UK 7,ATF-TRAINING-STRIKE-TF-UK7,10,3,true,true
+training-strike-tf,Training Strike TF,Football Shoes,UK 8,ATF-TRAINING-STRIKE-TF-UK8,10,3,true,true
+training-strike-tf,Training Strike TF,Football Shoes,UK 9,ATF-TRAINING-STRIKE-TF-UK9,10,3,true,true
+training-strike-tf,Training Strike TF,Football Shoes,UK 10,ATF-TRAINING-STRIKE-TF-UK10,10,3,true,true
+training-strike-tf,Training Strike TF,Football Shoes,UK 11,ATF-TRAINING-STRIKE-TF-UK11,10,3,true,true
+urban-grip-turf,Urban Grip Turf,Football Shoes,UK 6,ATF-URBAN-GRIP-TURF-UK6,10,3,true,true
+urban-grip-turf,Urban Grip Turf,Football Shoes,UK 7,ATF-URBAN-GRIP-TURF-UK7,10,3,true,true
+urban-grip-turf,Urban Grip Turf,Football Shoes,UK 8,ATF-URBAN-GRIP-TURF-UK8,10,3,true,true
+urban-grip-turf,Urban Grip Turf,Football Shoes,UK 9,ATF-URBAN-GRIP-TURF-UK9,10,3,true,true
+urban-grip-turf,Urban Grip Turf,Football Shoes,UK 10,ATF-URBAN-GRIP-TURF-UK10,10,3,true,true
+urban-grip-turf,Urban Grip Turf,Football Shoes,UK 11,ATF-URBAN-GRIP-TURF-UK11,10,3,true,true
+velocity-grip-sg,Velocity Grip SG,Football Shoes,UK 6,ATF-VELOCITY-GRIP-SG-UK6,10,3,true,true
+velocity-grip-sg,Velocity Grip SG,Football Shoes,UK 7,ATF-VELOCITY-GRIP-SG-UK7,10,3,true,true
+velocity-grip-sg,Velocity Grip SG,Football Shoes,UK 8,ATF-VELOCITY-GRIP-SG-UK8,10,3,true,true
+velocity-grip-sg,Velocity Grip SG,Football Shoes,UK 9,ATF-VELOCITY-GRIP-SG-UK9,10,3,true,true
+velocity-grip-sg,Velocity Grip SG,Football Shoes,UK 10,ATF-VELOCITY-GRIP-SG-UK10,10,3,true,true
+velocity-grip-sg,Velocity Grip SG,Football Shoes,UK 11,ATF-VELOCITY-GRIP-SG-UK11,10,3,true,true
+white-turf-precision,White Turf Precision,Football Shoes,UK 6,ATF-WHITE-TURF-PRECISION-UK6,10,3,true,true
+white-turf-precision,White Turf Precision,Football Shoes,UK 7,ATF-WHITE-TURF-PRECISION-UK7,10,3,true,true
+white-turf-precision,White Turf Precision,Football Shoes,UK 8,ATF-WHITE-TURF-PRECISION-UK8,10,3,true,true
+white-turf-precision,White Turf Precision,Football Shoes,UK 9,ATF-WHITE-TURF-PRECISION-UK9,10,3,true,true
+white-turf-precision,White Turf Precision,Football Shoes,UK 10,ATF-WHITE-TURF-PRECISION-UK10,10,3,true,true
+white-turf-precision,White Turf Precision,Football Shoes,UK 11,ATF-WHITE-TURF-PRECISION-UK11,10,3,true,true
+academy-training-jersey,Academy Training Jersey,Jerseys,S,ATF-ACADEMY-TRAINING-JERSEY-S,10,3,true,true
+academy-training-jersey,Academy Training Jersey,Jerseys,M,ATF-ACADEMY-TRAINING-JERSEY-M,10,3,true,true
+academy-training-jersey,Academy Training Jersey,Jerseys,L,ATF-ACADEMY-TRAINING-JERSEY-L,10,3,true,true
+academy-training-jersey,Academy Training Jersey,Jerseys,XL,ATF-ACADEMY-TRAINING-JERSEY-XL,10,3,true,true
+academy-training-jersey,Academy Training Jersey,Jerseys,XXL,ATF-ACADEMY-TRAINING-JERSEY-XXL,10,3,true,true
+carbon-away-jersey,Carbon Away Jersey,Jerseys,S,ATF-CARBON-AWAY-JERSEY-S,10,3,true,true
+carbon-away-jersey,Carbon Away Jersey,Jerseys,M,ATF-CARBON-AWAY-JERSEY-M,10,3,true,true
+carbon-away-jersey,Carbon Away Jersey,Jerseys,L,ATF-CARBON-AWAY-JERSEY-L,10,3,true,true
+carbon-away-jersey,Carbon Away Jersey,Jerseys,XL,ATF-CARBON-AWAY-JERSEY-XL,10,3,true,true
+carbon-away-jersey,Carbon Away Jersey,Jerseys,XXL,ATF-CARBON-AWAY-JERSEY-XXL,10,3,true,true
+city-home-jersey,City Home Jersey,Jerseys,S,ATF-CITY-HOME-JERSEY-S,10,3,true,true
+city-home-jersey,City Home Jersey,Jerseys,M,ATF-CITY-HOME-JERSEY-M,10,3,true,true
+city-home-jersey,City Home Jersey,Jerseys,L,ATF-CITY-HOME-JERSEY-L,10,3,true,true
+city-home-jersey,City Home Jersey,Jerseys,XL,ATF-CITY-HOME-JERSEY-XL,10,3,true,true
+city-home-jersey,City Home Jersey,Jerseys,XXL,ATF-CITY-HOME-JERSEY-XXL,10,3,true,true
+elite-away-jersey,Elite Away Jersey,Jerseys,S,ATF-ELITE-AWAY-JERSEY-S,10,3,true,true
+elite-away-jersey,Elite Away Jersey,Jerseys,M,ATF-ELITE-AWAY-JERSEY-M,10,3,true,true
+elite-away-jersey,Elite Away Jersey,Jerseys,L,ATF-ELITE-AWAY-JERSEY-L,10,3,true,true
+elite-away-jersey,Elite Away Jersey,Jerseys,XL,ATF-ELITE-AWAY-JERSEY-XL,10,3,true,true
+elite-away-jersey,Elite Away Jersey,Jerseys,XXL,ATF-ELITE-AWAY-JERSEY-XXL,10,3,true,true
+elite-home-jersey,Elite Home Jersey,Jerseys,S,ATF-ELITE-HOME-JERSEY-S,10,3,true,true
+elite-home-jersey,Elite Home Jersey,Jerseys,M,ATF-ELITE-HOME-JERSEY-M,10,3,true,true
+elite-home-jersey,Elite Home Jersey,Jerseys,L,ATF-ELITE-HOME-JERSEY-L,10,3,true,true
+elite-home-jersey,Elite Home Jersey,Jerseys,XL,ATF-ELITE-HOME-JERSEY-XL,10,3,true,true
+elite-home-jersey,Elite Home Jersey,Jerseys,XXL,ATF-ELITE-HOME-JERSEY-XXL,10,3,true,true
+fan-edition-crest-jersey,Fan Edition Crest Jersey,Jerseys,S,ATF-FAN-EDITION-CREST-JERSEY-S,10,3,true,true
+fan-edition-crest-jersey,Fan Edition Crest Jersey,Jerseys,M,ATF-FAN-EDITION-CREST-JERSEY-M,10,3,true,true
+fan-edition-crest-jersey,Fan Edition Crest Jersey,Jerseys,L,ATF-FAN-EDITION-CREST-JERSEY-L,10,3,true,true
+fan-edition-crest-jersey,Fan Edition Crest Jersey,Jerseys,XL,ATF-FAN-EDITION-CREST-JERSEY-XL,10,3,true,true
+fan-edition-crest-jersey,Fan Edition Crest Jersey,Jerseys,XXL,ATF-FAN-EDITION-CREST-JERSEY-XXL,10,3,true,true
+goalkeeper-command-jersey,Goalkeeper Command Jersey,Jerseys,S,ATF-GOALKEEPER-COMMAND-JERSEY-S,10,3,true,true
+goalkeeper-command-jersey,Goalkeeper Command Jersey,Jerseys,M,ATF-GOALKEEPER-COMMAND-JERSEY-M,10,3,true,true
+goalkeeper-command-jersey,Goalkeeper Command Jersey,Jerseys,L,ATF-GOALKEEPER-COMMAND-JERSEY-L,10,3,true,true
+goalkeeper-command-jersey,Goalkeeper Command Jersey,Jerseys,XL,ATF-GOALKEEPER-COMMAND-JERSEY-XL,10,3,true,true
+goalkeeper-command-jersey,Goalkeeper Command Jersey,Jerseys,XXL,ATF-GOALKEEPER-COMMAND-JERSEY-XXL,10,3,true,true
+heritage-long-sleeve-jersey,Heritage Long Sleeve Jersey,Jerseys,S,ATF-HERITAGE-LONG-SLEEVE-JERSEY-S,10,3,true,true
+heritage-long-sleeve-jersey,Heritage Long Sleeve Jersey,Jerseys,M,ATF-HERITAGE-LONG-SLEEVE-JERSEY-M,10,3,true,true
+heritage-long-sleeve-jersey,Heritage Long Sleeve Jersey,Jerseys,L,ATF-HERITAGE-LONG-SLEEVE-JERSEY-L,10,3,true,true
+heritage-long-sleeve-jersey,Heritage Long Sleeve Jersey,Jerseys,XL,ATF-HERITAGE-LONG-SLEEVE-JERSEY-XL,10,3,true,true
+heritage-long-sleeve-jersey,Heritage Long Sleeve Jersey,Jerseys,XXL,ATF-HERITAGE-LONG-SLEEVE-JERSEY-XXL,10,3,true,true
+legendary-home-jersey,Legendary Home Jersey,Jerseys,S,ATF-LEGENDARY-HOME-JERSEY-S,10,3,true,true
+legendary-home-jersey,Legendary Home Jersey,Jerseys,M,ATF-LEGENDARY-HOME-JERSEY-M,10,3,true,true
+legendary-home-jersey,Legendary Home Jersey,Jerseys,L,ATF-LEGENDARY-HOME-JERSEY-L,10,3,true,true
+legendary-home-jersey,Legendary Home Jersey,Jerseys,XL,ATF-LEGENDARY-HOME-JERSEY-XL,10,3,true,true
+legendary-home-jersey,Legendary Home Jersey,Jerseys,XXL,ATF-LEGENDARY-HOME-JERSEY-XXL,10,3,true,true
+limited-matchday-jersey,Limited Matchday Jersey,Jerseys,S,ATF-LIMITED-MATCHDAY-JERSEY-S,10,3,true,true
+limited-matchday-jersey,Limited Matchday Jersey,Jerseys,M,ATF-LIMITED-MATCHDAY-JERSEY-M,10,3,true,true
+limited-matchday-jersey,Limited Matchday Jersey,Jerseys,L,ATF-LIMITED-MATCHDAY-JERSEY-L,10,3,true,true
+limited-matchday-jersey,Limited Matchday Jersey,Jerseys,XL,ATF-LIMITED-MATCHDAY-JERSEY-XL,10,3,true,true
+limited-matchday-jersey,Limited Matchday Jersey,Jerseys,XXL,ATF-LIMITED-MATCHDAY-JERSEY-XXL,10,3,true,true
+long-sleeve-match-jersey,Long Sleeve Match Jersey,Jerseys,S,ATF-LONG-SLEEVE-MATCH-JERSEY-S,10,3,true,true
+long-sleeve-match-jersey,Long Sleeve Match Jersey,Jerseys,M,ATF-LONG-SLEEVE-MATCH-JERSEY-M,10,3,true,true
+long-sleeve-match-jersey,Long Sleeve Match Jersey,Jerseys,L,ATF-LONG-SLEEVE-MATCH-JERSEY-L,10,3,true,true
+long-sleeve-match-jersey,Long Sleeve Match Jersey,Jerseys,XL,ATF-LONG-SLEEVE-MATCH-JERSEY-XL,10,3,true,true
+long-sleeve-match-jersey,Long Sleeve Match Jersey,Jerseys,XXL,ATF-LONG-SLEEVE-MATCH-JERSEY-XXL,10,3,true,true
+matchday-pro-jersey,Matchday Pro Jersey,Jerseys,S,ATF-MATCHDAY-PRO-JERSEY-S,10,3,true,true
+matchday-pro-jersey,Matchday Pro Jersey,Jerseys,M,ATF-MATCHDAY-PRO-JERSEY-M,10,3,true,true
+matchday-pro-jersey,Matchday Pro Jersey,Jerseys,L,ATF-MATCHDAY-PRO-JERSEY-L,10,3,true,true
+matchday-pro-jersey,Matchday Pro Jersey,Jerseys,XL,ATF-MATCHDAY-PRO-JERSEY-XL,10,3,true,true
+matchday-pro-jersey,Matchday Pro Jersey,Jerseys,XXL,ATF-MATCHDAY-PRO-JERSEY-XXL,10,3,true,true
+midnight-away-jersey,Midnight Away Jersey,Jerseys,S,ATF-MIDNIGHT-AWAY-JERSEY-S,10,3,true,true
+midnight-away-jersey,Midnight Away Jersey,Jerseys,M,ATF-MIDNIGHT-AWAY-JERSEY-M,10,3,true,true
+midnight-away-jersey,Midnight Away Jersey,Jerseys,L,ATF-MIDNIGHT-AWAY-JERSEY-L,10,3,true,true
+midnight-away-jersey,Midnight Away Jersey,Jerseys,XL,ATF-MIDNIGHT-AWAY-JERSEY-XL,10,3,true,true
+midnight-away-jersey,Midnight Away Jersey,Jerseys,XXL,ATF-MIDNIGHT-AWAY-JERSEY-XXL,10,3,true,true
+neon-accent-jersey,Neon Accent Jersey,Jerseys,S,ATF-NEON-ACCENT-JERSEY-S,10,3,true,true
+neon-accent-jersey,Neon Accent Jersey,Jerseys,M,ATF-NEON-ACCENT-JERSEY-M,10,3,true,true
+neon-accent-jersey,Neon Accent Jersey,Jerseys,L,ATF-NEON-ACCENT-JERSEY-L,10,3,true,true
+neon-accent-jersey,Neon Accent Jersey,Jerseys,XL,ATF-NEON-ACCENT-JERSEY-XL,10,3,true,true
+neon-accent-jersey,Neon Accent Jersey,Jerseys,XXL,ATF-NEON-ACCENT-JERSEY-XXL,10,3,true,true
+premium-black-jersey,Premium Black Jersey,Jerseys,S,ATF-PREMIUM-BLACK-JERSEY-S,10,3,true,true
+premium-black-jersey,Premium Black Jersey,Jerseys,M,ATF-PREMIUM-BLACK-JERSEY-M,10,3,true,true
+premium-black-jersey,Premium Black Jersey,Jerseys,L,ATF-PREMIUM-BLACK-JERSEY-L,10,3,true,true
+premium-black-jersey,Premium Black Jersey,Jerseys,XL,ATF-PREMIUM-BLACK-JERSEY-XL,10,3,true,true
+premium-black-jersey,Premium Black Jersey,Jerseys,XXL,ATF-PREMIUM-BLACK-JERSEY-XXL,10,3,true,true
+pro-training-jersey,Pro Training Jersey,Jerseys,S,ATF-PRO-TRAINING-JERSEY-S,10,3,true,true
+pro-training-jersey,Pro Training Jersey,Jerseys,M,ATF-PRO-TRAINING-JERSEY-M,10,3,true,true
+pro-training-jersey,Pro Training Jersey,Jerseys,L,ATF-PRO-TRAINING-JERSEY-L,10,3,true,true
+pro-training-jersey,Pro Training Jersey,Jerseys,XL,ATF-PRO-TRAINING-JERSEY-XL,10,3,true,true
+pro-training-jersey,Pro Training Jersey,Jerseys,XXL,ATF-PRO-TRAINING-JERSEY-XXL,10,3,true,true
+retro-club-jersey,Retro Club Jersey,Jerseys,S,ATF-RETRO-CLUB-JERSEY-S,10,3,true,true
+retro-club-jersey,Retro Club Jersey,Jerseys,M,ATF-RETRO-CLUB-JERSEY-M,10,3,true,true
+retro-club-jersey,Retro Club Jersey,Jerseys,L,ATF-RETRO-CLUB-JERSEY-L,10,3,true,true
+retro-club-jersey,Retro Club Jersey,Jerseys,XL,ATF-RETRO-CLUB-JERSEY-XL,10,3,true,true
+retro-club-jersey,Retro Club Jersey,Jerseys,XXL,ATF-RETRO-CLUB-JERSEY-XXL,10,3,true,true
+shadow-away-jersey,Shadow Away Jersey,Jerseys,S,ATF-SHADOW-AWAY-JERSEY-S,10,3,true,true
+shadow-away-jersey,Shadow Away Jersey,Jerseys,M,ATF-SHADOW-AWAY-JERSEY-M,10,3,true,true
+shadow-away-jersey,Shadow Away Jersey,Jerseys,L,ATF-SHADOW-AWAY-JERSEY-L,10,3,true,true
+shadow-away-jersey,Shadow Away Jersey,Jerseys,XL,ATF-SHADOW-AWAY-JERSEY-XL,10,3,true,true
+shadow-away-jersey,Shadow Away Jersey,Jerseys,XXL,ATF-SHADOW-AWAY-JERSEY-XXL,10,3,true,true
+stadium-fan-jersey,Stadium Fan Jersey,Jerseys,S,ATF-STADIUM-FAN-JERSEY-S,10,3,true,true
+stadium-fan-jersey,Stadium Fan Jersey,Jerseys,M,ATF-STADIUM-FAN-JERSEY-M,10,3,true,true
+stadium-fan-jersey,Stadium Fan Jersey,Jerseys,L,ATF-STADIUM-FAN-JERSEY-L,10,3,true,true
+stadium-fan-jersey,Stadium Fan Jersey,Jerseys,XL,ATF-STADIUM-FAN-JERSEY-XL,10,3,true,true
+stadium-fan-jersey,Stadium Fan Jersey,Jerseys,XXL,ATF-STADIUM-FAN-JERSEY-XXL,10,3,true,true
+training-match-jersey,Training Match Jersey,Jerseys,S,ATF-TRAINING-MATCH-JERSEY-S,10,3,true,true
+training-match-jersey,Training Match Jersey,Jerseys,M,ATF-TRAINING-MATCH-JERSEY-M,10,3,true,true
+training-match-jersey,Training Match Jersey,Jerseys,L,ATF-TRAINING-MATCH-JERSEY-L,10,3,true,true
+training-match-jersey,Training Match Jersey,Jerseys,XL,ATF-TRAINING-MATCH-JERSEY-XL,10,3,true,true
+training-match-jersey,Training Match Jersey,Jerseys,XXL,ATF-TRAINING-MATCH-JERSEY-XXL,10,3,true,true
+travel-fan-jersey,Travel Fan Jersey,Jerseys,S,ATF-TRAVEL-FAN-JERSEY-S,10,3,true,true
+travel-fan-jersey,Travel Fan Jersey,Jerseys,M,ATF-TRAVEL-FAN-JERSEY-M,10,3,true,true
+travel-fan-jersey,Travel Fan Jersey,Jerseys,L,ATF-TRAVEL-FAN-JERSEY-L,10,3,true,true
+travel-fan-jersey,Travel Fan Jersey,Jerseys,XL,ATF-TRAVEL-FAN-JERSEY-XL,10,3,true,true
+travel-fan-jersey,Travel Fan Jersey,Jerseys,XXL,ATF-TRAVEL-FAN-JERSEY-XXL,10,3,true,true
+white-gold-away-jersey,White Gold Away Jersey,Jerseys,S,ATF-WHITE-GOLD-AWAY-JERSEY-S,10,3,true,true
+white-gold-away-jersey,White Gold Away Jersey,Jerseys,M,ATF-WHITE-GOLD-AWAY-JERSEY-M,10,3,true,true
+white-gold-away-jersey,White Gold Away Jersey,Jerseys,L,ATF-WHITE-GOLD-AWAY-JERSEY-L,10,3,true,true
+white-gold-away-jersey,White Gold Away Jersey,Jerseys,XL,ATF-WHITE-GOLD-AWAY-JERSEY-XL,10,3,true,true
+white-gold-away-jersey,White Gold Away Jersey,Jerseys,XXL,ATF-WHITE-GOLD-AWAY-JERSEY-XXL,10,3,true,true
+whiteout-training-jersey,Whiteout Training Jersey,Jerseys,S,ATF-WHITEOUT-TRAINING-JERSEY-S,10,3,true,true
+whiteout-training-jersey,Whiteout Training Jersey,Jerseys,M,ATF-WHITEOUT-TRAINING-JERSEY-M,10,3,true,true
+whiteout-training-jersey,Whiteout Training Jersey,Jerseys,L,ATF-WHITEOUT-TRAINING-JERSEY-L,10,3,true,true
+whiteout-training-jersey,Whiteout Training Jersey,Jerseys,XL,ATF-WHITEOUT-TRAINING-JERSEY-XL,10,3,true,true
+whiteout-training-jersey,Whiteout Training Jersey,Jerseys,XXL,ATF-WHITEOUT-TRAINING-JERSEY-XXL,10,3,true,true
+away-day-fan-tee,Away Day Fan Tee,T-Shirts,S,ATF-AWAY-DAY-FAN-TEE-S,10,3,true,true
+away-day-fan-tee,Away Day Fan Tee,T-Shirts,M,ATF-AWAY-DAY-FAN-TEE-M,10,3,true,true
+away-day-fan-tee,Away Day Fan Tee,T-Shirts,L,ATF-AWAY-DAY-FAN-TEE-L,10,3,true,true
+away-day-fan-tee,Away Day Fan Tee,T-Shirts,XL,ATF-AWAY-DAY-FAN-TEE-XL,10,3,true,true
+away-day-fan-tee,Away Day Fan Tee,T-Shirts,XXL,ATF-AWAY-DAY-FAN-TEE-XXL,10,3,true,true
+base-layer-compression-tee,Base Layer Compression Tee,T-Shirts,S,ATF-BASE-LAYER-COMPRESSION-TEE-S,10,3,true,true
+base-layer-compression-tee,Base Layer Compression Tee,T-Shirts,M,ATF-BASE-LAYER-COMPRESSION-TEE-M,10,3,true,true
+base-layer-compression-tee,Base Layer Compression Tee,T-Shirts,L,ATF-BASE-LAYER-COMPRESSION-TEE-L,10,3,true,true
+base-layer-compression-tee,Base Layer Compression Tee,T-Shirts,XL,ATF-BASE-LAYER-COMPRESSION-TEE-XL,10,3,true,true
+base-layer-compression-tee,Base Layer Compression Tee,T-Shirts,XXL,ATF-BASE-LAYER-COMPRESSION-TEE-XXL,10,3,true,true
+blackout-lifestyle-tee,Blackout Lifestyle Tee,T-Shirts,S,ATF-BLACKOUT-LIFESTYLE-TEE-S,10,3,true,true
+blackout-lifestyle-tee,Blackout Lifestyle Tee,T-Shirts,M,ATF-BLACKOUT-LIFESTYLE-TEE-M,10,3,true,true
+blackout-lifestyle-tee,Blackout Lifestyle Tee,T-Shirts,L,ATF-BLACKOUT-LIFESTYLE-TEE-L,10,3,true,true
+blackout-lifestyle-tee,Blackout Lifestyle Tee,T-Shirts,XL,ATF-BLACKOUT-LIFESTYLE-TEE-XL,10,3,true,true
+blackout-lifestyle-tee,Blackout Lifestyle Tee,T-Shirts,XXL,ATF-BLACKOUT-LIFESTYLE-TEE-XXL,10,3,true,true
+carbon-flex-tee,Carbon Flex Tee,T-Shirts,S,ATF-CARBON-FLEX-TEE-S,10,3,true,true
+carbon-flex-tee,Carbon Flex Tee,T-Shirts,M,ATF-CARBON-FLEX-TEE-M,10,3,true,true
+carbon-flex-tee,Carbon Flex Tee,T-Shirts,L,ATF-CARBON-FLEX-TEE-L,10,3,true,true
+carbon-flex-tee,Carbon Flex Tee,T-Shirts,XL,ATF-CARBON-FLEX-TEE-XL,10,3,true,true
+carbon-flex-tee,Carbon Flex Tee,T-Shirts,XXL,ATF-CARBON-FLEX-TEE-XXL,10,3,true,true
+elite-compression-tee,Elite Compression Tee,T-Shirts,S,ATF-ELITE-COMPRESSION-TEE-S,10,3,true,true
+elite-compression-tee,Elite Compression Tee,T-Shirts,M,ATF-ELITE-COMPRESSION-TEE-M,10,3,true,true
+elite-compression-tee,Elite Compression Tee,T-Shirts,L,ATF-ELITE-COMPRESSION-TEE-L,10,3,true,true
+elite-compression-tee,Elite Compression Tee,T-Shirts,XL,ATF-ELITE-COMPRESSION-TEE-XL,10,3,true,true
+elite-compression-tee,Elite Compression Tee,T-Shirts,XXL,ATF-ELITE-COMPRESSION-TEE-XXL,10,3,true,true
+fan-edition-logo-tee,Fan Edition Logo Tee,T-Shirts,S,ATF-FAN-EDITION-LOGO-TEE-S,10,3,true,true
+fan-edition-logo-tee,Fan Edition Logo Tee,T-Shirts,M,ATF-FAN-EDITION-LOGO-TEE-M,10,3,true,true
+fan-edition-logo-tee,Fan Edition Logo Tee,T-Shirts,L,ATF-FAN-EDITION-LOGO-TEE-L,10,3,true,true
+fan-edition-logo-tee,Fan Edition Logo Tee,T-Shirts,XL,ATF-FAN-EDITION-LOGO-TEE-XL,10,3,true,true
+fan-edition-logo-tee,Fan Edition Logo Tee,T-Shirts,XXL,ATF-FAN-EDITION-LOGO-TEE-XXL,10,3,true,true
+limited-neon-tee,Limited Neon Tee,T-Shirts,S,ATF-LIMITED-NEON-TEE-S,10,3,true,true
+limited-neon-tee,Limited Neon Tee,T-Shirts,M,ATF-LIMITED-NEON-TEE-M,10,3,true,true
+limited-neon-tee,Limited Neon Tee,T-Shirts,L,ATF-LIMITED-NEON-TEE-L,10,3,true,true
+limited-neon-tee,Limited Neon Tee,T-Shirts,XL,ATF-LIMITED-NEON-TEE-XL,10,3,true,true
+limited-neon-tee,Limited Neon Tee,T-Shirts,XXL,ATF-LIMITED-NEON-TEE-XXL,10,3,true,true
+matchday-crest-tee,Matchday Crest Tee,T-Shirts,S,ATF-MATCHDAY-CREST-TEE-S,10,3,true,true
+matchday-crest-tee,Matchday Crest Tee,T-Shirts,M,ATF-MATCHDAY-CREST-TEE-M,10,3,true,true
+matchday-crest-tee,Matchday Crest Tee,T-Shirts,L,ATF-MATCHDAY-CREST-TEE-L,10,3,true,true
+matchday-crest-tee,Matchday Crest Tee,T-Shirts,XL,ATF-MATCHDAY-CREST-TEE-XL,10,3,true,true
+matchday-crest-tee,Matchday Crest Tee,T-Shirts,XXL,ATF-MATCHDAY-CREST-TEE-XXL,10,3,true,true
+matchday-pro-tee,Matchday Pro Tee,T-Shirts,S,ATF-MATCHDAY-PRO-TEE-S,10,3,true,true
+matchday-pro-tee,Matchday Pro Tee,T-Shirts,M,ATF-MATCHDAY-PRO-TEE-M,10,3,true,true
+matchday-pro-tee,Matchday Pro Tee,T-Shirts,L,ATF-MATCHDAY-PRO-TEE-L,10,3,true,true
+matchday-pro-tee,Matchday Pro Tee,T-Shirts,XL,ATF-MATCHDAY-PRO-TEE-XL,10,3,true,true
+matchday-pro-tee,Matchday Pro Tee,T-Shirts,XXL,ATF-MATCHDAY-PRO-TEE-XXL,10,3,true,true
+matchday-travel-tee,Matchday Travel Tee,T-Shirts,S,ATF-MATCHDAY-TRAVEL-TEE-S,10,3,true,true
+matchday-travel-tee,Matchday Travel Tee,T-Shirts,M,ATF-MATCHDAY-TRAVEL-TEE-M,10,3,true,true
+matchday-travel-tee,Matchday Travel Tee,T-Shirts,L,ATF-MATCHDAY-TRAVEL-TEE-L,10,3,true,true
+matchday-travel-tee,Matchday Travel Tee,T-Shirts,XL,ATF-MATCHDAY-TRAVEL-TEE-XL,10,3,true,true
+matchday-travel-tee,Matchday Travel Tee,T-Shirts,XXL,ATF-MATCHDAY-TRAVEL-TEE-XXL,10,3,true,true
+neon-strike-training-tee,Neon Strike Training Tee,T-Shirts,S,ATF-NEON-STRIKE-TRAINING-TEE-S,10,3,true,true
+neon-strike-training-tee,Neon Strike Training Tee,T-Shirts,M,ATF-NEON-STRIKE-TRAINING-TEE-M,10,3,true,true
+neon-strike-training-tee,Neon Strike Training Tee,T-Shirts,L,ATF-NEON-STRIKE-TRAINING-TEE-L,10,3,true,true
+neon-strike-training-tee,Neon Strike Training Tee,T-Shirts,XL,ATF-NEON-STRIKE-TRAINING-TEE-XL,10,3,true,true
+neon-strike-training-tee,Neon Strike Training Tee,T-Shirts,XXL,ATF-NEON-STRIKE-TRAINING-TEE-XXL,10,3,true,true
+performance-tee,Performance Tee,T-Shirts,S,ATF-PERFORMANCE-TEE-S,10,3,true,true
+performance-tee,Performance Tee,T-Shirts,M,ATF-PERFORMANCE-TEE-M,10,3,true,true
+performance-tee,Performance Tee,T-Shirts,L,ATF-PERFORMANCE-TEE-L,10,3,true,true
+performance-tee,Performance Tee,T-Shirts,XL,ATF-PERFORMANCE-TEE-XL,10,3,true,true
+performance-tee,Performance Tee,T-Shirts,XXL,ATF-PERFORMANCE-TEE-XXL,10,3,true,true
+performance-training-tee,Performance Training Tee,T-Shirts,S,ATF-PERFORMANCE-TRAINING-TEE-S,10,3,true,true
+performance-training-tee,Performance Training Tee,T-Shirts,M,ATF-PERFORMANCE-TRAINING-TEE-M,10,3,true,true
+performance-training-tee,Performance Training Tee,T-Shirts,L,ATF-PERFORMANCE-TRAINING-TEE-L,10,3,true,true
+performance-training-tee,Performance Training Tee,T-Shirts,XL,ATF-PERFORMANCE-TRAINING-TEE-XL,10,3,true,true
+performance-training-tee,Performance Training Tee,T-Shirts,XXL,ATF-PERFORMANCE-TRAINING-TEE-XXL,10,3,true,true
+premium-club-tee,Premium Club Tee,T-Shirts,S,ATF-PREMIUM-CLUB-TEE-S,10,3,true,true
+premium-club-tee,Premium Club Tee,T-Shirts,M,ATF-PREMIUM-CLUB-TEE-M,10,3,true,true
+premium-club-tee,Premium Club Tee,T-Shirts,L,ATF-PREMIUM-CLUB-TEE-L,10,3,true,true
+premium-club-tee,Premium Club Tee,T-Shirts,XL,ATF-PREMIUM-CLUB-TEE-XL,10,3,true,true
+premium-club-tee,Premium Club Tee,T-Shirts,XXL,ATF-PREMIUM-CLUB-TEE-XXL,10,3,true,true
+pro-training-tee,Pro Training Tee,T-Shirts,S,ATF-PRO-TRAINING-TEE-S,10,3,true,true
+pro-training-tee,Pro Training Tee,T-Shirts,M,ATF-PRO-TRAINING-TEE-M,10,3,true,true
+pro-training-tee,Pro Training Tee,T-Shirts,L,ATF-PRO-TRAINING-TEE-L,10,3,true,true
+pro-training-tee,Pro Training Tee,T-Shirts,XL,ATF-PRO-TRAINING-TEE-XL,10,3,true,true
+pro-training-tee,Pro Training Tee,T-Shirts,XXL,ATF-PRO-TRAINING-TEE-XXL,10,3,true,true
+recovery-compression-tee,Recovery Compression Tee,T-Shirts,S,ATF-RECOVERY-COMPRESSION-TEE-S,10,3,true,true
+recovery-compression-tee,Recovery Compression Tee,T-Shirts,M,ATF-RECOVERY-COMPRESSION-TEE-M,10,3,true,true
+recovery-compression-tee,Recovery Compression Tee,T-Shirts,L,ATF-RECOVERY-COMPRESSION-TEE-L,10,3,true,true
+recovery-compression-tee,Recovery Compression Tee,T-Shirts,XL,ATF-RECOVERY-COMPRESSION-TEE-XL,10,3,true,true
+recovery-compression-tee,Recovery Compression Tee,T-Shirts,XXL,ATF-RECOVERY-COMPRESSION-TEE-XXL,10,3,true,true
+stadium-fan-graphic-tee,Stadium Fan Graphic Tee,T-Shirts,S,ATF-STADIUM-FAN-GRAPHIC-TEE-S,10,3,true,true
+stadium-fan-graphic-tee,Stadium Fan Graphic Tee,T-Shirts,M,ATF-STADIUM-FAN-GRAPHIC-TEE-M,10,3,true,true
+stadium-fan-graphic-tee,Stadium Fan Graphic Tee,T-Shirts,L,ATF-STADIUM-FAN-GRAPHIC-TEE-L,10,3,true,true
+stadium-fan-graphic-tee,Stadium Fan Graphic Tee,T-Shirts,XL,ATF-STADIUM-FAN-GRAPHIC-TEE-XL,10,3,true,true
+stadium-fan-graphic-tee,Stadium Fan Graphic Tee,T-Shirts,XXL,ATF-STADIUM-FAN-GRAPHIC-TEE-XXL,10,3,true,true
+training-mesh-tee,Training Mesh Tee,T-Shirts,S,ATF-TRAINING-MESH-TEE-S,10,3,true,true
+training-mesh-tee,Training Mesh Tee,T-Shirts,M,ATF-TRAINING-MESH-TEE-M,10,3,true,true
+training-mesh-tee,Training Mesh Tee,T-Shirts,L,ATF-TRAINING-MESH-TEE-L,10,3,true,true
+training-mesh-tee,Training Mesh Tee,T-Shirts,XL,ATF-TRAINING-MESH-TEE-XL,10,3,true,true
+training-mesh-tee,Training Mesh Tee,T-Shirts,XXL,ATF-TRAINING-MESH-TEE-XXL,10,3,true,true
+travel-club-tee,Travel Club Tee,T-Shirts,S,ATF-TRAVEL-CLUB-TEE-S,10,3,true,true
+travel-club-tee,Travel Club Tee,T-Shirts,M,ATF-TRAVEL-CLUB-TEE-M,10,3,true,true
+travel-club-tee,Travel Club Tee,T-Shirts,L,ATF-TRAVEL-CLUB-TEE-L,10,3,true,true
+travel-club-tee,Travel Club Tee,T-Shirts,XL,ATF-TRAVEL-CLUB-TEE-XL,10,3,true,true
+travel-club-tee,Travel Club Tee,T-Shirts,XXL,ATF-TRAVEL-CLUB-TEE-XXL,10,3,true,true
+urban-football-tee,Urban Football Tee,T-Shirts,S,ATF-URBAN-FOOTBALL-TEE-S,10,3,true,true
+urban-football-tee,Urban Football Tee,T-Shirts,M,ATF-URBAN-FOOTBALL-TEE-M,10,3,true,true
+urban-football-tee,Urban Football Tee,T-Shirts,L,ATF-URBAN-FOOTBALL-TEE-L,10,3,true,true
+urban-football-tee,Urban Football Tee,T-Shirts,XL,ATF-URBAN-FOOTBALL-TEE-XL,10,3,true,true
+urban-football-tee,Urban Football Tee,T-Shirts,XXL,ATF-URBAN-FOOTBALL-TEE-XXL,10,3,true,true
+warmup-speed-tee,Warmup Speed Tee,T-Shirts,S,ATF-WARMUP-SPEED-TEE-S,10,3,true,true
+warmup-speed-tee,Warmup Speed Tee,T-Shirts,M,ATF-WARMUP-SPEED-TEE-M,10,3,true,true
+warmup-speed-tee,Warmup Speed Tee,T-Shirts,L,ATF-WARMUP-SPEED-TEE-L,10,3,true,true
+warmup-speed-tee,Warmup Speed Tee,T-Shirts,XL,ATF-WARMUP-SPEED-TEE-XL,10,3,true,true
+warmup-speed-tee,Warmup Speed Tee,T-Shirts,XXL,ATF-WARMUP-SPEED-TEE-XXL,10,3,true,true
+academy-training-ball,Academy Training Ball,Footballs,Size 5,ATF-ACADEMY-TRAINING-BALL-SIZE5,10,3,true,true
+all-weather-ball,All Weather Ball,Footballs,Size 5,ATF-ALL-WEATHER-BALL-SIZE5,10,3,true,true
+blackout-match-ball,Blackout Match Ball,Footballs,Size 5,ATF-BLACKOUT-MATCH-BALL-SIZE5,10,3,true,true
+carbon-flight-ball,Carbon Flight Ball,Footballs,Size 5,ATF-CARBON-FLIGHT-BALL-SIZE5,10,3,true,true
+elite-training-ball,Elite Training Ball,Footballs,Size 5,ATF-ELITE-TRAINING-BALL-SIZE5,10,3,true,true
+fan-edition-ball,Fan Edition Ball,Footballs,Size 5,ATF-FAN-EDITION-BALL-SIZE5,10,3,true,true
+futsal-precision-ball,Futsal Precision Ball,Footballs,Size 4,ATF-FUTSAL-PRECISION-BALL-SIZE4,10,3,true,true
+grass-master-ball,Grass Master Ball,Footballs,Size 5,ATF-GRASS-MASTER-BALL-SIZE5,10,3,true,true
+heritage-club-ball,Heritage Club Ball,Footballs,Size 5,ATF-HERITAGE-CLUB-BALL-SIZE5,10,3,true,true
+indoor-control-ball,Indoor Control Ball,Footballs,Size 5,ATF-INDOOR-CONTROL-BALL-SIZE5,10,3,true,true
+limited-neon-ball,Limited Neon Ball,Footballs,Size 5,ATF-LIMITED-NEON-BALL-SIZE5,10,3,true,true
+matchday-precision-ball,Matchday Precision Ball,Footballs,Size 5,ATF-MATCHDAY-PRECISION-BALL-SIZE5,10,3,true,true
+neon-strike-football,Neon Strike Football,Footballs,Size 5,ATF-NEON-STRIKE-FOOTBALL-SIZE5,10,3,true,true
+night-game-ball,Night Game Ball,Footballs,Size 5,ATF-NIGHT-GAME-BALL-SIZE5,10,3,true,true
+premier-match-ball,Premier Match Ball,Footballs,Size 5,ATF-PREMIER-MATCH-BALL-SIZE5,10,3,true,true
+pro-league-ball,Pro League Ball,Footballs,Size 5,ATF-PRO-LEAGUE-BALL-SIZE5,10,3,true,true
+speed-touch-ball,Speed Touch Ball,Footballs,Size 5,ATF-SPEED-TOUCH-BALL-SIZE5,10,3,true,true
+street-control-ball,Street Control Ball,Footballs,Size 5,ATF-STREET-CONTROL-BALL-SIZE5,10,3,true,true
+tournament-pro-ball,Tournament Pro Ball,Footballs,Size 5,ATF-TOURNAMENT-PRO-BALL-SIZE5,10,3,true,true
+training-lite-ball,Training Lite Ball,Footballs,Size 5,ATF-TRAINING-LITE-BALL-SIZE5,10,3,true,true
+urban-futsal-ball,Urban Futsal Ball,Footballs,Size 4,ATF-URBAN-FUTSAL-BALL-SIZE4,10,3,true,true
+boot-care-kit,Boot Care Kit,Accessories,One Size,ATF-BOOT-CARE-KIT-ONESIZE,10,3,true,true
+captain-elite-armband,Captain Elite Armband,Accessories,One Size,ATF-CAPTAIN-ELITE-ARMBAND-ONESIZE,10,3,true,true
+carbon-shin-guards,Carbon Shin Guards,Accessories,One Size,ATF-CARBON-SHIN-GUARDS-ONESIZE,10,3,true,true
+coach-tactics-board,Coach Tactics Board,Accessories,One Size,ATF-COACH-TACTICS-BOARD-ONESIZE,10,3,true,true
+compression-arm-sleeves,Compression Arm Sleeves,Accessories,One Size,ATF-COMPRESSION-ARM-SLEEVES-ONESIZE,10,3,true,true
+dual-action-ball-pump,Dual Action Ball Pump,Accessories,One Size,ATF-DUAL-ACTION-BALL-PUMP-ONESIZE,10,3,true,true
+elite-boot-bag,Elite Boot Bag,Accessories,One Size,ATF-ELITE-BOOT-BAG-ONESIZE,10,3,true,true
+flex-wristbands,Flex Wristbands,Accessories,One Size,ATF-FLEX-WRISTBANDS-ONESIZE,10,3,true,true
+marker-disc-set,Marker Disc Set,Accessories,One Size,ATF-MARKER-DISC-SET-ONESIZE,10,3,true,true
+match-grip-socks,Match Grip Socks,Accessories,One Size,ATF-MATCH-GRIP-SOCKS-ONESIZE,10,3,true,true
+matchday-headband,Matchday Headband,Accessories,One Size,ATF-MATCHDAY-HEADBAND-ONESIZE,10,3,true,true
+microfiber-cooling-towel,Microfiber Cooling Towel,Accessories,One Size,ATF-MICROFIBER-COOLING-TOWEL-ONESIZE,10,3,true,true
+neon-training-bib,Neon Training Bib,Accessories,One Size,ATF-NEON-TRAINING-BIB-ONESIZE,10,3,true,true
+pro-grip-gloves,Pro Grip Gloves,Accessories,One Size,ATF-PRO-GRIP-GLOVES-ONESIZE,10,3,true,true
+pro-hydration-bottle,Pro Hydration Bottle,Accessories,One Size,ATF-PRO-HYDRATION-BOTTLE-ONESIZE,10,3,true,true
+pro-sports-tape,Pro Sports Tape,Accessories,One Size,ATF-PRO-SPORTS-TAPE-ONESIZE,10,3,true,true
+speed-agility-ladder,Speed Agility Ladder,Accessories,One Size,ATF-SPEED-AGILITY-LADDER-ONESIZE,10,3,true,true
+speed-training-cones,Speed Training Cones,Accessories,One Size,ATF-SPEED-TRAINING-CONES-ONESIZE,10,3,true,true
+stability-ankle-supports,Stability Ankle Supports,Accessories,One Size,ATF-STABILITY-ANKLE-SUPPORTS-ONESIZE,10,3,true,true
+team-kit-bag,Team Kit Bag,Accessories,One Size,ATF-TEAM-KIT-BAG-ONESIZE,10,3,true,true
