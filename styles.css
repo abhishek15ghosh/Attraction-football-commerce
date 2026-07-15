@@ -910,6 +910,115 @@ button {
 .product-card:nth-child(4) .color-dots span:nth-child(2) { background: #111; }
 .product-card:nth-child(4) .color-dots span:nth-child(3) { background: #671b12; }
 
+/* Phase 2A1 variant preview. These rules apply only when the default-off flag is enabled. */
+.variant-preview-enabled .variant-selector {
+  min-height: 112px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.variant-preview-enabled .variant-selector__head {
+  display: flex;
+  align-items: center;
+  min-height: 18px;
+  margin-bottom: 9px;
+  color: #f4f5f1;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.variant-preview-enabled .variant-selector__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-height: 42px;
+}
+
+.variant-preview-enabled .variant-option {
+  min-width: 48px;
+  min-height: 42px;
+  padding: 7px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #f5f5f2;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.15;
+  text-align: center;
+}
+
+.variant-preview-enabled .variant-option:hover:not(:disabled) {
+  border-color: rgba(207, 255, 32, 0.7);
+}
+
+.variant-preview-enabled .variant-option:focus-visible {
+  outline: 2px solid var(--lime);
+  outline-offset: 2px;
+}
+
+.variant-preview-enabled .variant-option.is-selected {
+  border-color: var(--lime);
+  background: var(--lime);
+  color: #080900;
+}
+
+.variant-preview-enabled .variant-option:disabled {
+  border-color: rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.025);
+  color: #777b76;
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+.variant-preview-enabled .variant-option__state {
+  color: #d7ff4f;
+  font-size: 8px;
+  font-weight: 900;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.variant-preview-enabled .variant-option:disabled .variant-option__state {
+  color: #9b9e99;
+}
+
+.variant-preview-enabled .variant-selector__message {
+  min-height: 17px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.variant-preview-enabled .js-add-cart:disabled {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.055);
+  color: #a9ada5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+@media (max-width: 560px) {
+  .variant-preview-enabled .variant-selector {
+    min-height: 116px;
+  }
+
+  .variant-preview-enabled .variant-option {
+    min-width: 50px;
+    min-height: 44px;
+  }
+}
+
 .product-ball {
   width: 100%;
   margin: 10px auto 22px;

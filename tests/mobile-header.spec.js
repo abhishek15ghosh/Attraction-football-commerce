@@ -1,5 +1,6 @@
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { expect, test } = require("@playwright/test");
 
 const screenshotDir = path.join(process.cwd(), "screenshots");
@@ -72,6 +73,32 @@ async function waitForImages(locator) {
   );
 }
 
+function createVariantRows(productId, labels, states = {}) {
+  return labels.map((variantLabel, index) => {
+    const configuredState = states[variantLabel] || "In Stock";
+    const purchasableQuantity = configuredState === "Out of Stock"
+      ? 0
+      : configuredState === "Low Stock"
+        ? 2
+        : 10;
+    const variantIdSuffix = crypto.createHash("sha256")
+      .update(`${productId}:${variantLabel}:${index}`)
+      .digest("hex")
+      .slice(0, 12);
+    return {
+      variant_id: `00000000-0000-4000-8000-${variantIdSuffix}`,
+      product_id: productId,
+      sku: `ATF-${productId}-${variantLabel}`.toUpperCase().replace(/[^A-Z0-9]+/g, "-"),
+      variant_label: variantLabel,
+      purchasable_quantity: purchasableQuantity,
+      low_stock_threshold: 3,
+      stock_state: configuredState,
+      product_is_active: true,
+      variant_is_active: true,
+    };
+  });
+}
+
 async function openDrawer(page) {
   const menuButton = page.locator(".menu-toggle");
   const drawer = page.locator("#mobile-drawer");
@@ -93,6 +120,9 @@ async function openDrawer(page) {
 
 async function installSupabaseStub(page, options = {}) {
   await page.addInitScript((config) => {
+    if (config.variantUi === true) {
+      window.__ATTRACTION_FEATURES__ = { variantUi: true };
+    }
     let currentUser = config.user || null;
     let remainingPlaceOrderFailures = Number(config.failPlaceOrderAttempts || 0);
     let remainingCartMergeFailures = Number(config.failCartMergeAttempts || 0);
@@ -110,6 +140,7 @@ async function installSupabaseStub(page, options = {}) {
       selects: [],
       cloudCarts: JSON.parse(JSON.stringify(config.cloudCarts || {})),
       cloudWishlists: JSON.parse(JSON.stringify(config.cloudWishlists || {})),
+      variantRows: JSON.parse(JSON.stringify(config.variantRows || [])),
     };
     window.__attractionSupabaseTestState = state;
 
@@ -198,6 +229,16 @@ async function installSupabaseStub(page, options = {}) {
       },
       rpc: async (name, payload = {}) => {
         state.rpcs.push({ name, payload });
+        if (name === "get_storefront_variants") {
+          if (config.failVariantRpc) {
+            return { data: null, error: { message: "Private test detail" } };
+          }
+          const requestedIds = new Set(payload.p_product_ids || []);
+          return {
+            data: state.variantRows.filter((row) => requestedIds.has(row.product_id)),
+            error: null,
+          };
+        }
         if (name === "is_admin") return { data: Boolean(config.isAdmin), error: config.adminError ? { message: config.adminError } : null };
         if (["set_cart_item", "remove_cart_item", "clear_cart", "merge_guest_cart"].includes(name)) {
           if (name === "merge_guest_cart" && remainingCartMergeFailures > 0) {
@@ -761,6 +802,197 @@ test("a product card missing data-product-id fails closed", async ({ page }) => 
     wishlist: JSON.parse(localStorage.getItem("attractionWishlist:guest") || "[]"),
   }));
   expect(guestData).toEqual({ cart: [], wishlist: [] });
+});
+
+test("variant preview is off by default and leaves product-level cart behavior unchanged", async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("variantUi", "true");
+  });
+  await installSupabaseStub(page, {
+    user: null,
+    variantRows: createVariantRows("predator-elite-fg", ["UK 6", "UK 7", "UK 8", "UK 9", "UK 10", "UK 11"]),
+  });
+  await page.goto("/products.html?variantUi=true#variantUi", { waitUntil: "domcontentloaded" });
+
+  await expect(page.locator("[data-variant-selector]")).toHaveCount(0);
+  const variantCalls = await page.evaluate(() =>
+    window.__attractionSupabaseTestState.rpcs.filter((call) => call.name === "get_storefront_variants")
+  );
+  expect(variantCalls).toEqual([]);
+
+  await page.locator('.product-card[data-product-id="predator-elite-fg"]')
+    .getByRole("button", { name: "Add to Cart" })
+    .click();
+  await expect(page.locator(".cart-count")).toHaveText("1");
+});
+
+test("variant preview blocks existing cart mutations and checkout without altering loaded cart data", async ({ page }) => {
+  const user = { id: "variant-preview-user", user_metadata: {} };
+  await installSupabaseStub(page, {
+    user,
+    variantUi: true,
+    cloudCarts: { [user.id]: [{ product_id: "predator-elite-fg", quantity: 1 }] },
+    variantRows: createVariantRows("predator-elite-fg", ["UK 6", "UK 7", "UK 8", "UK 9", "UK 10", "UK 11"]),
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(".cart-count")).toHaveText("1");
+
+  await page.locator(".cart-button").click();
+  await page.locator('[data-cart-change="1"]').click();
+  await expect(page.locator(".toast")).toHaveText("Variant cart not enabled yet");
+  await page.locator("[data-checkout]").click();
+  await expect(page.locator(".checkout-modal")).toHaveCount(0);
+
+  const state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(state.cloudCarts[user.id]).toEqual([{ product_id: "predator-elite-fg", quantity: 1 }]);
+  expect(state.rpcs.filter((call) => ["set_cart_item", "remove_cart_item", "clear_cart", "place_order"].includes(call.name))).toEqual([]);
+});
+
+test("variant preview orders shoe sizes canonically and exposes stock and accessibility states", async ({ page }) => {
+  const shoeRows = createVariantRows(
+    "predator-elite-fg",
+    ["UK 11", "UK 8", "UK 6", "UK 10", "UK 7", "UK 9"],
+    { "UK 9": "Low Stock", "UK 11": "Out of Stock" }
+  );
+  await installSupabaseStub(page, { user: null, variantUi: true, variantRows: shoeRows });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+
+  const card = page.locator('.product-card[data-product-id="predator-elite-fg"]');
+  const selector = card.locator("[data-variant-selector]");
+  await expect(selector.getByRole("group", { name: "Select size for Predator Elite FG" })).toBeVisible();
+  await expect(selector.locator(".variant-option > span:first-child")).toHaveText([
+    "UK 6", "UK 7", "UK 8", "UK 9", "UK 10", "UK 11",
+  ]);
+  await expect(selector.locator('.variant-option[aria-pressed="true"]')).toHaveCount(0);
+
+  const lowStock = selector.getByRole("button", { name: /UK 9 Low Stock/ });
+  const outOfStock = selector.getByRole("button", { name: /UK 11 Out of Stock/ });
+  await expect(lowStock).toContainText("Low Stock");
+  await expect(outOfStock).toBeDisabled();
+  await selector.getByRole("button", { name: "UK 8", exact: true }).click();
+  await expect(selector.getByRole("button", { name: "UK 8", exact: true })).toHaveAttribute("aria-pressed", "true");
+
+  const previewButton = card.getByRole("button", { name: "Variant cart not enabled yet" });
+  await expect(previewButton).toBeDisabled();
+  await previewButton.evaluate((button) => button.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  await expect(page.locator(".cart-count")).toHaveText("0");
+
+  await card.locator(".wish").click();
+  await expect(page.locator(".wishlist-count").first()).toHaveText("1");
+  const state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(state.rpcs.filter((call) => call.name === "get_storefront_variants")).toHaveLength(1);
+  expect(state.rpcs.filter((call) => ["set_cart_item", "remove_cart_item", "clear_cart", "place_order"].includes(call.name))).toEqual([]);
+});
+
+test("variant preview uses canonical clothing order and auto-selects single football and accessory variants", async ({ page }) => {
+  const variantRows = [
+    ...createVariantRows("legendary-home-jersey", ["XXL", "M", "S", "XL", "L"]),
+    ...createVariantRows("matchday-travel-tee", ["L", "XXL", "S", "XL", "M"]),
+    ...createVariantRows("pro-grip-gloves", ["One Size"]),
+    ...createVariantRows("futsal-precision-ball", ["Size 4"]),
+    ...createVariantRows("premier-match-ball", ["Size 5"]),
+  ];
+  await installSupabaseStub(page, { user: null, variantUi: true, variantRows });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+
+  for (const productId of ["legendary-home-jersey", "matchday-travel-tee"]) {
+    const selector = page.locator(`.product-card[data-product-id="${productId}"] [data-variant-selector]`);
+    await expect(selector.locator(".variant-option > span:first-child")).toHaveText(["S", "M", "L", "XL", "XXL"]);
+    await expect(selector.locator('.variant-option[aria-pressed="true"]')).toHaveCount(0);
+  }
+
+  for (const [productId, label] of [
+    ["pro-grip-gloves", "One Size"],
+    ["futsal-precision-ball", "Size 4"],
+    ["premier-match-ball", "Size 5"],
+  ]) {
+    const option = page.locator(`.product-card[data-product-id="${productId}"] .variant-option`, { hasText: label });
+    await expect(option).toHaveAttribute("aria-pressed", "true");
+  }
+});
+
+test("duplicate product cards share one variant response and synchronized selection", async ({ page }) => {
+  const html = fs.readFileSync(path.join(process.cwd(), "products.html"), "utf8");
+  const productCard = html.match(/<article\b[^>]*data-product-id="predator-elite-fg"[^>]*>[\s\S]*?<\/article>/)?.[0];
+  expect(productCard).toBeTruthy();
+  await page.route("**/products.html", (route) => route.fulfill({
+    contentType: "text/html",
+    body: html.replace(productCard, `${productCard}${productCard}`),
+  }));
+  await installSupabaseStub(page, {
+    user: null,
+    variantUi: true,
+    variantRows: createVariantRows("predator-elite-fg", ["UK 6", "UK 7", "UK 8", "UK 9", "UK 10", "UK 11"]),
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+
+  const duplicateCards = page.locator('.product-card[data-product-id="predator-elite-fg"]');
+  await expect(duplicateCards).toHaveCount(2);
+  await duplicateCards.first().getByRole("button", { name: "UK 10", exact: true }).click();
+  await expect(duplicateCards.locator('.variant-option[data-variant-id][aria-pressed="true"]')).toHaveCount(2);
+  await expect(duplicateCards.locator('.variant-option[aria-pressed="true"] > span:first-child')).toHaveText(["UK 10", "UK 10"]);
+
+  const calls = await page.evaluate(() =>
+    window.__attractionSupabaseTestState.rpcs.filter((call) => call.name === "get_storefront_variants")
+  );
+  expect(calls).toHaveLength(1);
+  expect(calls[0].payload.p_product_ids.filter((id) => id === "predator-elite-fg")).toHaveLength(1);
+});
+
+test("variant preview fails closed when the variant RPC fails", async ({ page }) => {
+  const errors = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") errors.push(message.text());
+  });
+  await installSupabaseStub(page, { user: null, variantUi: true, failVariantRpc: true });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+
+  const card = page.locator('.product-card[data-product-id="predator-elite-fg"]');
+  await expect(card.locator(".variant-selector__message")).toHaveText("Variant options are unavailable.");
+  await expect(card.getByRole("button", { name: "Variant cart not enabled yet" })).toBeDisabled();
+  expect(errors.filter((message) => message === "Variant options are unavailable.")).toHaveLength(1);
+  expect(errors.join(" ")).not.toContain("Private test detail");
+});
+
+test("variant preview shows no-variant state, hydrates wishlist cards, and remains mobile-safe", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => {
+    localStorage.setItem("attractionWishlist:guest", JSON.stringify([{
+      id: "pro-grip-gloves",
+      name: "Pro Grip Gloves",
+      category: "Accessories",
+      price: 49.99,
+      image: "assets/accessory-pro-grip-gloves-real.avif",
+    }]));
+  });
+  await installSupabaseStub(page, {
+    user: null,
+    variantUi: true,
+    variantRows: createVariantRows("pro-grip-gloves", ["One Size"]),
+  });
+  await page.goto("/wishlist.html", { waitUntil: "domcontentloaded" });
+
+  const card = page.locator('.wishlist-product-card[data-product-id="pro-grip-gloves"]');
+  await expect(card).toBeVisible();
+  await expect(card.getByRole("group", { name: "Select size for Pro Grip Gloves" })).toBeVisible();
+  await expect(card.getByRole("button", { name: "One Size", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(card.getByRole("button", { name: "Variant cart not enabled yet" })).toBeDisabled();
+  const optionBox = await card.getByRole("button", { name: "One Size", exact: true }).boundingBox();
+  expect(optionBox.height).toBeGreaterThanOrEqual(44);
+  await expectNoHorizontalOverflow(page);
+
+  await card.getByRole("button", { name: /Remove Pro Grip Gloves from wishlist/ }).click();
+  await expect(page.locator("[data-wishlist-empty]")).toContainText("Your wishlist is empty.");
+});
+
+test("variant preview displays Currently unavailable when an RPC returns no variants", async ({ page }) => {
+  await installSupabaseStub(page, { user: null, variantUi: true, variantRows: [] });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+
+  const card = page.locator('.product-card[data-product-id="predator-elite-fg"]');
+  await expect(card.locator(".variant-selector__message")).toHaveText("Currently unavailable");
+  await expect(card.locator(".variant-option")).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "Variant cart not enabled yet" })).toBeDisabled();
 });
 
 test("cookie banner appears on first visit and saves consent preferences", async ({ page }) => {

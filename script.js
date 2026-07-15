@@ -30,6 +30,16 @@
     (window.supabase?.createClient
       ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
       : null);
+  const VARIANT_UI_ENABLED = window.__ATTRACTION_FEATURES__?.variantUi === true;
+  const VARIANT_STOCK_STATES = new Set(["In Stock", "Low Stock", "Out of Stock"]);
+  const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const VARIANT_LABEL_ORDER = {
+    "Football Shoes": ["UK 6", "UK 7", "UK 8", "UK 9", "UK 10", "UK 11"],
+    Jerseys: ["S", "M", "L", "XL", "XXL"],
+    "T-Shirts": ["S", "M", "L", "XL", "XXL"],
+    Footballs: ["Size 4", "Size 5"],
+    Accessories: ["One Size"],
+  };
 
   const readStorage = (key, fallback) => {
     try {
@@ -87,6 +97,12 @@
   let myOrdersLoadVersion = 0;
   let activeCancellationOrderId = null;
   let cancellationRequestSubmitting = false;
+  const variantsByProductId = new Map();
+  const selectedVariantByProductId = new Map();
+  const variantLoadStateByProductId = new Map();
+  const pendingVariantProductIds = new Set();
+  const warnedVariantLabels = new Set();
+  let variantLoadErrorLogged = false;
 
   const productCards = $$(".product-card");
   const cartButton = $(".cart-button");
@@ -141,6 +157,274 @@
     const image = $("img", card)?.getAttribute("src") || "";
 
     return { id, name, category, price, image };
+  }
+
+  function normalizeVariantCategory(category = "") {
+    const normalized = String(category).trim();
+    return ({
+      Jersey: "Jerseys",
+      "T-Shirt": "T-Shirts",
+      Football: "Footballs",
+    })[normalized] || normalized;
+  }
+
+  function getVariantCards(root = document) {
+    const cards = [];
+    if (root instanceof Element && root.matches(".product-card[data-product-id]")) cards.push(root);
+    if (root?.querySelectorAll) cards.push(...root.querySelectorAll(".product-card[data-product-id]"));
+    return [...new Set(cards)];
+  }
+
+  function getVariantCategory(productId) {
+    const card = $(`.product-card[data-product-id="${CSS.escape(productId)}"]`);
+    return normalizeVariantCategory(card ? getProductFromCard(card).category : productLookup.get(productId)?.category);
+  }
+
+  function normalizeStorefrontVariant(row, requestedIds) {
+    if (!row || typeof row !== "object") return null;
+
+    const variantId = String(row.variant_id || "").trim();
+    const productId = String(row.product_id || "").trim();
+    const sku = String(row.sku || "").trim();
+    const variantLabel = String(row.variant_label || "").trim();
+    const purchasableQuantity = Number(row.purchasable_quantity);
+    const lowStockThreshold = Number(row.low_stock_threshold);
+    const stockState = String(row.stock_state || "").trim();
+    const validQuantity = Number.isInteger(purchasableQuantity)
+      && purchasableQuantity >= 0
+      && purchasableQuantity <= MAX_CART_QUANTITY;
+    const validThreshold = Number.isInteger(lowStockThreshold) && lowStockThreshold >= 0;
+    const validStockState = stockState === "Out of Stock"
+      ? purchasableQuantity === 0
+      : stockState === "Low Stock"
+        ? purchasableQuantity > 0 && purchasableQuantity <= lowStockThreshold
+        : purchasableQuantity > 0;
+
+    if (!UUID_PATTERN.test(variantId)
+      || !productId
+      || !requestedIds.has(productId)
+      || !sku
+      || !variantLabel
+      || !validQuantity
+      || !validThreshold
+      || !VARIANT_STOCK_STATES.has(stockState)
+      || !validStockState
+      || row.product_is_active !== true
+      || row.variant_is_active !== true) {
+      return null;
+    }
+
+    return {
+      variantId,
+      productId,
+      sku,
+      variantLabel,
+      purchasableQuantity,
+      lowStockThreshold,
+      stockState,
+      productIsActive: true,
+      variantIsActive: true,
+    };
+  }
+
+  function sortStorefrontVariants(productId, variants) {
+    const knownLabels = VARIANT_LABEL_ORDER[getVariantCategory(productId)] || [];
+    return [...variants].sort((first, second) => {
+      const firstIndex = knownLabels.indexOf(first.variantLabel);
+      const secondIndex = knownLabels.indexOf(second.variantLabel);
+      if (firstIndex !== -1 || secondIndex !== -1) {
+        if (firstIndex === -1) return 1;
+        if (secondIndex === -1) return -1;
+        return firstIndex - secondIndex;
+      }
+      return first.variantLabel.localeCompare(second.variantLabel, undefined, { sensitivity: "base" });
+    });
+  }
+
+  function warnForUnknownVariantLabels(productId, variants) {
+    const knownLabels = VARIANT_LABEL_ORDER[getVariantCategory(productId)] || [];
+    variants.forEach((variant) => {
+      if (knownLabels.includes(variant.variantLabel)) return;
+      const warningKey = `${productId}:${variant.variantLabel}`;
+      if (warnedVariantLabels.has(warningKey)) return;
+      warnedVariantLabels.add(warningKey);
+      console.warn(`Variant configuration warning: unknown label "${variant.variantLabel}" for ${productId}.`);
+    });
+  }
+
+  function prepareVariantPreviewCard(card) {
+    if (!VARIANT_UI_ENABLED) return null;
+    card.classList.add("variant-preview-card");
+
+    const addButton = $(".js-add-cart", card);
+    if (addButton) {
+      addButton.disabled = true;
+      addButton.setAttribute("aria-disabled", "true");
+      addButton.textContent = "Variant cart not enabled yet";
+    }
+
+    let selector = $("[data-variant-selector]", card);
+    if (selector) return selector;
+
+    selector = document.createElement("section");
+    selector.className = "variant-selector";
+    selector.dataset.variantSelector = "";
+    selector.innerHTML = `
+      <div class="variant-selector__head">
+        <span>Select size</span>
+      </div>
+      <div class="variant-selector__options" role="group"></div>
+      <p class="variant-selector__message" aria-live="polite"></p>
+    `;
+    card.insertBefore(selector, addButton || null);
+    return selector;
+  }
+
+  function renderVariantCard(card) {
+    if (!VARIANT_UI_ENABLED) return;
+    const productId = String(card.dataset.productId || "").trim();
+    if (!productId) return;
+
+    const selector = prepareVariantPreviewCard(card);
+    if (!selector) return;
+    const productName = getProductFromCard(card).name;
+    const options = $(".variant-selector__options", selector);
+    const message = $(".variant-selector__message", selector);
+    const state = variantLoadStateByProductId.get(productId) || "loading";
+    options.setAttribute("aria-label", `Select size for ${productName}`);
+    options.setAttribute("aria-busy", String(state === "loading"));
+
+    if (state === "loading") {
+      options.innerHTML = "";
+      message.textContent = "Loading size options...";
+      return;
+    }
+    if (state === "error") {
+      options.innerHTML = "";
+      message.textContent = "Variant options are unavailable.";
+      return;
+    }
+
+    const variants = variantsByProductId.get(productId) || [];
+    if (!variants.length) {
+      options.innerHTML = "";
+      message.textContent = "Currently unavailable";
+      return;
+    }
+
+    const availableVariants = variants.filter((variant) => variant.purchasableQuantity > 0);
+    let selectedVariantId = selectedVariantByProductId.get(productId);
+    if (!availableVariants.some((variant) => variant.variantId === selectedVariantId)) {
+      selectedVariantByProductId.delete(productId);
+      selectedVariantId = null;
+    }
+    if (!selectedVariantId && variants.length === 1 && availableVariants.length === 1) {
+      selectedVariantId = availableVariants[0].variantId;
+      selectedVariantByProductId.set(productId, selectedVariantId);
+    }
+
+    options.innerHTML = variants.map((variant) => {
+      const isOutOfStock = variant.purchasableQuantity === 0 || variant.stockState === "Out of Stock";
+      const isSelected = variant.variantId === selectedVariantId;
+      const status = variant.stockState === "Low Stock" || isOutOfStock
+        ? `<span class="variant-option__state">${escapeHTML(variant.stockState)}</span>`
+        : "";
+      return `
+        <button class="variant-option${isSelected ? " is-selected" : ""}${isOutOfStock ? " is-out-of-stock" : ""}"
+          type="button"
+          data-variant-id="${escapeHTML(variant.variantId)}"
+          aria-pressed="${String(isSelected)}"
+          ${isOutOfStock ? "disabled" : ""}>
+          <span>${escapeHTML(variant.variantLabel)}</span>
+          ${status}
+        </button>
+      `;
+    }).join("");
+
+    $$('[data-variant-id]', options).forEach((button) => {
+      button.addEventListener("click", () => {
+        selectedVariantByProductId.set(productId, button.dataset.variantId);
+        renderVariantCardsForProduct(productId);
+      });
+    });
+
+    if (!availableVariants.length) message.textContent = "Currently unavailable";
+    else if (selectedVariantId) {
+      const selected = variants.find((variant) => variant.variantId === selectedVariantId);
+      message.textContent = `Selected: ${selected?.variantLabel || ""}`;
+    } else message.textContent = "Select an available size.";
+  }
+
+  function renderVariantCardsForProduct(productId) {
+    $$(`.product-card[data-product-id="${CSS.escape(productId)}"]`).forEach(renderVariantCard);
+  }
+
+  async function hydrateVariantCards(root = document) {
+    if (!VARIANT_UI_ENABLED) return;
+    document.body.classList.add("variant-preview-enabled");
+    const cards = getVariantCards(root);
+    const productIds = [...new Set(cards.map((card) => String(card.dataset.productId || "").trim()).filter(Boolean))];
+    if (!productIds.length) return;
+
+    cards.forEach((card) => {
+      const productId = String(card.dataset.productId || "").trim();
+      if (!variantLoadStateByProductId.has(productId)) variantLoadStateByProductId.set(productId, "loading");
+      renderVariantCard(card);
+    });
+
+    const pendingIds = productIds.filter((productId) => variantLoadStateByProductId.get(productId) === "loading"
+      && !variantsByProductId.has(productId)
+      && !pendingVariantProductIds.has(productId));
+    if (!pendingIds.length) return;
+    pendingIds.forEach((productId) => pendingVariantProductIds.add(productId));
+
+    if (!supabaseClient) {
+      pendingIds.forEach((productId) => variantLoadStateByProductId.set(productId, "error"));
+      pendingIds.forEach((productId) => pendingVariantProductIds.delete(productId));
+      pendingIds.forEach(renderVariantCardsForProduct);
+      if (!variantLoadErrorLogged) {
+        variantLoadErrorLogged = true;
+        console.error("Variant options are unavailable.");
+      }
+      return;
+    }
+
+    const requestedIds = new Set(pendingIds);
+    try {
+      const { data, error } = await supabaseClient.rpc("get_storefront_variants", {
+        p_product_ids: pendingIds,
+      });
+      if (error || !Array.isArray(data)) throw new Error("Variant RPC failed");
+
+      const grouped = new Map(pendingIds.map((productId) => [productId, []]));
+      let malformedRows = 0;
+      data.forEach((row) => {
+        const variant = normalizeStorefrontVariant(row, requestedIds);
+        if (!variant) {
+          malformedRows += 1;
+          return;
+        }
+        grouped.get(variant.productId).push(variant);
+      });
+      if (malformedRows) console.warn(`Variant configuration warning: ignored ${malformedRows} malformed row(s).`);
+
+      pendingIds.forEach((productId) => {
+        const variants = sortStorefrontVariants(productId, grouped.get(productId) || []);
+        warnForUnknownVariantLabels(productId, variants);
+        variantsByProductId.set(productId, variants);
+        variantLoadStateByProductId.set(productId, variants.length ? "ready" : "empty");
+        pendingVariantProductIds.delete(productId);
+        renderVariantCardsForProduct(productId);
+      });
+    } catch (error) {
+      pendingIds.forEach((productId) => variantLoadStateByProductId.set(productId, "error"));
+      pendingIds.forEach((productId) => pendingVariantProductIds.delete(productId));
+      pendingIds.forEach(renderVariantCardsForProduct);
+      if (!variantLoadErrorLogged) {
+        variantLoadErrorLogged = true;
+        console.error("Variant options are unavailable.");
+      }
+    }
   }
 
   function getStorageOwnerId(user = authUser) {
@@ -1216,7 +1500,8 @@
       }
 
       productLookup.set(product.id, product);
-      addButton.addEventListener("click", () => addToCart(product));
+      if (VARIANT_UI_ENABLED) prepareVariantPreviewCard(card);
+      else addButton.addEventListener("click", () => addToCart(product));
     });
   }
 
@@ -2379,6 +2664,10 @@
 
   async function addToCart(product) {
     if (!hasProductIdentity(product)) return;
+    if (VARIANT_UI_ENABLED) {
+      showToast("Variant cart not enabled yet");
+      return;
+    }
     await waitForAuthReady();
     if (!authUser?.id) {
       const existing = cart.find((item) => item.id === product.id);
@@ -2408,6 +2697,10 @@
   }
 
   async function changeCartQuantity(id, change) {
+    if (VARIANT_UI_ENABLED) {
+      showToast("Variant cart not enabled yet");
+      return;
+    }
     await waitForAuthReady();
     const current = cart.find((item) => item.id === id);
     if (!current) return;
@@ -2439,6 +2732,10 @@
   }
 
   async function clearCurrentCart() {
+    if (VARIANT_UI_ENABLED) {
+      showToast("Variant cart not enabled yet");
+      return;
+    }
     await waitForAuthReady();
     if (!authUser?.id) {
       cart = [];
@@ -2744,6 +3041,10 @@
   }
 
   async function openCheckout() {
+    if (VARIANT_UI_ENABLED) {
+      showToast("Variant cart not enabled yet");
+      return;
+    }
     if (!cart.length) {
       showToast("Your cart is empty");
       return;
@@ -3205,6 +3506,7 @@
         `
       )
       .join("");
+    hydrateVariantCards(grid);
   }
 
   function bindWishlistPageActions() {
@@ -4103,6 +4405,7 @@
   function boot() {
     injectInteractionStyles();
     collectProducts();
+    hydrateVariantCards(document);
     createWishlistHeaderButton();
     createCartDrawer();
     createWishlistDrawer();
