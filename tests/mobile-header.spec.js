@@ -117,11 +117,25 @@ async function openDrawer(page) {
     .toBe(viewport.width);
 }
 
+async function exposeCheckoutTestHooks(page) {
+  await page.route("**/script.js", async (route) => {
+    const response = await route.fetch();
+    const source = await response.text();
+    const marker = "  function boot() {";
+    const exposed = `  window.__phase2A3CheckoutTestHooks = { handleCheckoutSubmit, createCheckoutModal };\n\n${marker}`;
+    expect(source).toContain(marker);
+    await route.fulfill({ response, body: source.replace(marker, exposed) });
+  });
+}
+
 
 async function installSupabaseStub(page, options = {}) {
   await page.addInitScript((config) => {
-    if (config.variantUi === true) {
-      window.__ATTRACTION_FEATURES__ = { variantUi: true };
+    if (config.variantUi === true || config.variantCartV2 === true) {
+      window.__ATTRACTION_FEATURES__ = {
+        variantUi: config.variantUi === true,
+        variantCartV2: config.variantCartV2 === true,
+      };
     }
     let currentUser = config.user || null;
     let remainingPlaceOrderFailures = Number(config.failPlaceOrderAttempts || 0);
@@ -139,6 +153,8 @@ async function installSupabaseStub(page, options = {}) {
       updates: [],
       selects: [],
       cloudCarts: JSON.parse(JSON.stringify(config.cloudCarts || {})),
+      cloudVariantCarts: JSON.parse(JSON.stringify(config.cloudVariantCarts || {})),
+      legacyVariantCarts: JSON.parse(JSON.stringify(config.legacyVariantCarts || {})),
       cloudWishlists: JSON.parse(JSON.stringify(config.cloudWishlists || {})),
       variantRows: JSON.parse(JSON.stringify(config.variantRows || [])),
     };
@@ -164,6 +180,7 @@ async function installSupabaseStub(page, options = {}) {
       ...(config.catalog || {}),
     };
     const mergeReceipts = new Set();
+    const variantMergeReceipts = new Map();
 
     const cartFor = (userId) => {
       if (!state.cloudCarts[userId]) state.cloudCarts[userId] = [];
@@ -173,6 +190,67 @@ async function installSupabaseStub(page, options = {}) {
       if (!state.cloudWishlists[userId]) state.cloudWishlists[userId] = [];
       return state.cloudWishlists[userId];
     };
+    const variantCartFor = (userId) => {
+      if (!state.cloudVariantCarts[userId]) state.cloudVariantCarts[userId] = [];
+      return state.cloudVariantCarts[userId];
+    };
+    const legacyVariantCartFor = (userId) => {
+      if (!state.legacyVariantCarts[userId]) state.legacyVariantCarts[userId] = [];
+      return state.legacyVariantCarts[userId];
+    };
+    const variantRowFor = (variantId) => state.variantRows.find((row) => row.variant_id === variantId);
+    const productFor = (productId) => catalog[productId] || {
+      id: productId,
+      name: productId,
+      category: "Product",
+      price: 0,
+      image: "",
+      is_active: true,
+    };
+    const joinedVariantCartRows = (userId) => variantCartFor(userId).map((item, index) => {
+      const variant = variantRowFor(item.product_variant_id) || {};
+      const product = productFor(item.product_id);
+      return {
+        cart_line_id: `10000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+        product_id: item.product_id,
+        product_variant_id: item.product_variant_id,
+        variant_sku: variant.sku || "",
+        variant_label: variant.variant_label || "Selected option",
+        product_name: product.name,
+        category: product.category,
+        unit_price: product.price,
+        image: product.image,
+        quantity: item.quantity,
+        product_is_active: item.product_is_active ?? product.is_active !== false,
+        variant_is_active: item.variant_is_active ?? variant.variant_is_active !== false,
+        purchasable_quantity: item.purchasable_quantity ?? variant.purchasable_quantity ?? 0,
+        stock_state: item.stock_state || variant.stock_state || "Unavailable",
+        checkout_resolution_required: false,
+        created_at: `2026-07-15T00:00:${String(index).padStart(2, "0")}.000Z`,
+        updated_at: `2026-07-15T00:00:${String(index).padStart(2, "0")}.000Z`,
+      };
+    });
+    const joinedLegacyVariantRows = (userId) => legacyVariantCartFor(userId).map((item) => {
+      const product = productFor(item.product_id);
+      const variants = state.variantRows.filter((row) => row.product_id === item.product_id && row.variant_is_active !== false);
+      const automatic = variants.length === 1 ? variants[0] : null;
+      return {
+        product_id: item.product_id,
+        product_name: product.name,
+        category: product.category,
+        unit_price: product.price,
+        image: product.image,
+        quantity: item.quantity,
+        product_is_active: product.is_active !== false,
+        active_variant_count: variants.length,
+        automatic_variant_id: automatic?.variant_id || null,
+        automatic_variant_sku: automatic?.sku || null,
+        automatic_variant_label: automatic?.variant_label || null,
+        resolution_status: variants.length === 1
+          ? "Automatic"
+          : variants.length > 1 ? "Size selection required" : "No active variants",
+      };
+    });
     const joinedCartRows = (userId) => cartFor(userId).map((item, index) => ({
       product_id: item.product_id,
       quantity: item.quantity,
@@ -239,6 +317,95 @@ async function installSupabaseStub(page, options = {}) {
             error: null,
           };
         }
+        if ([
+          "get_cart_v2",
+          "get_legacy_cart_items_v2",
+          "set_cart_item_v2",
+          "remove_cart_item_v2",
+          "clear_cart_v2",
+          "resolve_legacy_cart_item_v2",
+          "merge_guest_cart_v2",
+        ].includes(name)) {
+          const userId = currentUser?.id;
+          if (!userId) return { data: null, error: { code: "42501", message: "Authentication required" } };
+          if (config.failVariantCartRpc === name || config.failVariantCartRpc === true) {
+            return { data: null, error: { message: "Private variant cart failure" } };
+          }
+          if (name === "get_cart_v2") {
+            const delay = Number(config.variantCartLoadDelays?.[userId] || 0);
+            if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+            return { data: joinedVariantCartRows(userId), error: null };
+          }
+          if (name === "get_legacy_cart_items_v2") return { data: joinedLegacyVariantRows(userId), error: null };
+
+          const userCart = variantCartFor(userId);
+          if (name === "set_cart_item_v2") {
+            const delay = Number(config.variantMutationDelay || 0);
+            if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+            const existing = userCart.find((item) => item.product_variant_id === payload.p_product_variant_id);
+            if (existing) existing.quantity = payload.p_quantity;
+            else userCart.push({
+              product_id: payload.p_product_id,
+              product_variant_id: payload.p_product_variant_id,
+              quantity: payload.p_quantity,
+            });
+            return { data: payload.p_quantity, error: null };
+          }
+          if (name === "remove_cart_item_v2") {
+            const index = userCart.findIndex((item) => item.product_variant_id === payload.p_product_variant_id);
+            if (index >= 0) userCart.splice(index, 1);
+            return { data: index >= 0, error: null };
+          }
+          if (name === "clear_cart_v2") {
+            const count = userCart.length;
+            userCart.splice(0, userCart.length);
+            return { data: count, error: null };
+          }
+          if (name === "resolve_legacy_cart_item_v2") {
+            const legacy = legacyVariantCartFor(userId);
+            const index = legacy.findIndex((item) => item.product_id === payload.p_product_id);
+            if (index < 0) return { data: { status: "No legacy item" }, error: null };
+            const [item] = legacy.splice(index, 1);
+            const existing = userCart.find((saved) => saved.product_variant_id === payload.p_product_variant_id);
+            if (existing) existing.quantity = Math.min(20, existing.quantity + item.quantity);
+            else userCart.push({
+              product_id: item.product_id,
+              product_variant_id: payload.p_product_variant_id,
+              quantity: Math.min(20, item.quantity),
+            });
+            return { data: { status: "Resolved" }, error: null };
+          }
+
+          const normalized = [...(payload.p_items || [])]
+            .map((item) => ({
+              productId: item.productId,
+              productVariantId: item.productVariantId,
+              quantity: item.quantity,
+            }))
+            .sort((first, second) => first.productVariantId.localeCompare(second.productVariantId));
+          const signature = JSON.stringify(normalized);
+          const receiptKey = `${userId}:${payload.p_merge_token}`;
+          const existingReceipt = variantMergeReceipts.get(receiptKey);
+          if (existingReceipt && existingReceipt !== signature) {
+            return { data: null, error: { message: "Merge token payload mismatch" } };
+          }
+          if (existingReceipt) return { data: { idempotent_replay: true }, error: null };
+          if (config.failVariantMergeAttempts > 0) {
+            config.failVariantMergeAttempts -= 1;
+            return { data: null, error: { message: "Temporary variant merge failure" } };
+          }
+          variantMergeReceipts.set(receiptKey, signature);
+          normalized.forEach((item) => {
+            const existing = userCart.find((saved) => saved.product_variant_id === item.productVariantId);
+            if (existing) existing.quantity = Math.min(20, existing.quantity + item.quantity);
+            else userCart.push({
+              product_id: item.productId,
+              product_variant_id: item.productVariantId,
+              quantity: Math.min(20, item.quantity),
+            });
+          });
+          return { data: { idempotent_replay: false }, error: null };
+        }
         if (name === "is_admin") return { data: Boolean(config.isAdmin), error: config.adminError ? { message: config.adminError } : null };
         if (["set_cart_item", "remove_cart_item", "clear_cart", "merge_guest_cart"].includes(name)) {
           if (name === "merge_guest_cart" && remainingCartMergeFailures > 0) {
@@ -261,7 +428,10 @@ async function installSupabaseStub(page, options = {}) {
           if (name === "remove_cart_item") {
             const index = userCart.findIndex((item) => item.product_id === payload.p_product_id);
             if (index >= 0) userCart.splice(index, 1);
-            return { data: index >= 0, error: null };
+            const legacyCart = legacyVariantCartFor(userId);
+            const legacyIndex = legacyCart.findIndex((item) => item.product_id === payload.p_product_id);
+            if (legacyIndex >= 0) legacyCart.splice(legacyIndex, 1);
+            return { data: index >= 0 || legacyIndex >= 0, error: null };
           }
           if (name === "clear_cart") {
             const count = userCart.length;
@@ -993,6 +1163,685 @@ test("variant preview displays Currently unavailable when an RPC returns no vari
   await expect(card.locator(".variant-selector__message")).toHaveText("Currently unavailable");
   await expect(card.locator(".variant-option")).toHaveCount(0);
   await expect(card.getByRole("button", { name: "Variant cart not enabled yet" })).toBeDisabled();
+});
+
+test("variant cart flags stay default-off and selector-only mode never touches V2 state", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__variantStorageAccesses = [];
+    const originalGetItem = Storage.prototype.getItem;
+    const originalSetItem = Storage.prototype.setItem;
+    const originalRemoveItem = Storage.prototype.removeItem;
+    Storage.prototype.getItem = function getItem(key) {
+      if (String(key).startsWith("attractionCartV2")) window.__variantStorageAccesses.push(["get", key]);
+      return originalGetItem.call(this, key);
+    };
+    Storage.prototype.setItem = function setItem(key, value) {
+      if (String(key).startsWith("attractionCartV2")) window.__variantStorageAccesses.push(["set", key]);
+      return originalSetItem.call(this, key, value);
+    };
+    Storage.prototype.removeItem = function removeItem(key) {
+      if (String(key).startsWith("attractionCartV2")) window.__variantStorageAccesses.push(["remove", key]);
+      return originalRemoveItem.call(this, key);
+    };
+  });
+  await installSupabaseStub(page, {
+    user: null,
+    variantUi: true,
+    variantRows: createVariantRows("predator-elite-fg", ["UK 6", "UK 7"]),
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+
+  await page.locator('.product-card[data-product-id="predator-elite-fg"]')
+    .getByRole("button", { name: "UK 6", exact: true })
+    .click();
+  await expect(page.locator('.product-card[data-product-id="predator-elite-fg"]')
+    .getByRole("button", { name: "Variant cart not enabled yet" })).toBeDisabled();
+
+  const result = await page.evaluate(() => ({
+    storageAccesses: window.__variantStorageAccesses,
+    calls: window.__attractionSupabaseTestState.rpcs.map((call) => call.name),
+  }));
+  expect(result.storageAccesses).toEqual([]);
+  expect(result.calls.filter((name) => name.endsWith("_v2"))).toEqual([]);
+});
+
+test("guest V2 cart keeps shoe sizes as separate persistent lines and increments only the selected size", async ({ page }) => {
+  const variants = createVariantRows("predator-elite-fg", ["UK 6", "UK 7"]);
+  await installSupabaseStub(page, { user: null, variantUi: true, variantCartV2: true, variantRows: variants });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  const card = page.locator('.product-card[data-product-id="predator-elite-fg"]');
+
+  await card.getByRole("button", { name: "UK 6", exact: true }).click();
+  await card.getByRole("button", { name: "Add to Cart", exact: true }).click();
+  await card.getByRole("button", { name: "UK 7", exact: true }).click();
+  await card.getByRole("button", { name: "Add to Cart", exact: true }).click();
+  await card.getByRole("button", { name: "UK 6", exact: true }).click();
+  await card.getByRole("button", { name: "Add to Cart", exact: true }).click();
+
+  await expect(page.locator(".cart-count")).toHaveText("3");
+  await page.locator(".cart-button").click();
+  await expect(page.locator("[data-variant-cart-line]")).toHaveCount(2);
+  await expect(page.locator(".cart-items")).toContainText("Size: UK 6");
+  await expect(page.locator(".cart-items")).toContainText("Size: UK 7");
+  await expect(page.locator(`[data-variant-cart-line="${variants[0].variant_id}"] .cart-controls strong`)).toHaveText("2");
+  await expect(page.locator(`[data-variant-cart-line="${variants[1].variant_id}"] .cart-controls strong`)).toHaveText("1");
+
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("attractionCartV2:guest")));
+  expect(stored).toEqual([
+    { productId: "predator-elite-fg", productVariantId: variants[0].variant_id, quantity: 2 },
+    { productId: "predator-elite-fg", productVariantId: variants[1].variant_id, quantity: 1 },
+  ]);
+  expect(await page.evaluate(() => localStorage.getItem("attractionCart:guest"))).toBeNull();
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator(".cart-count")).toHaveText("3");
+});
+
+test("guest V2 malformed storage fails safely and unavailable lines remain removable", async ({ page }) => {
+  const [variant] = createVariantRows("predator-elite-fg", ["UK 8"], { "UK 8": "Out of Stock" });
+  await page.addInitScript(({ variantId }) => {
+    localStorage.setItem("attractionCartV2:guest", JSON.stringify([
+      { productId: "predator-elite-fg", productVariantId: variantId, quantity: 2 },
+      { productId: "bad", productVariantId: "not-a-uuid", quantity: 99 },
+    ]));
+  }, { variantId: variant.variant_id });
+  await installSupabaseStub(page, { user: null, variantUi: true, variantCartV2: true, variantRows: [variant] });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(".cart-count")).toHaveText("2");
+  await page.locator(".cart-button").click();
+  const line = page.locator(`[data-variant-cart-line="${variant.variant_id}"]`);
+  await expect(line).toContainText("Out of Stock");
+  await expect(line.getByRole("button", { name: /Increase/ })).toBeDisabled();
+  await line.getByRole("button", { name: /Decrease/ }).click();
+  await line.getByRole("button", { name: /Decrease/ }).click();
+  await expect(page.locator("[data-variant-cart-line]")).toHaveCount(0);
+});
+
+test("authenticated V2 cart renders authoritative rows and uses absolute set/remove mutations", async ({ page }) => {
+  const user = { id: "variant-v2-user", email: "variant@example.test", user_metadata: {} };
+  const variants = createVariantRows("predator-elite-fg", ["UK 8", "UK 9"]);
+  await installSupabaseStub(page, {
+    user,
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: variants,
+    cloudVariantCarts: {
+      [user.id]: variants.map((variant) => ({
+        product_id: "predator-elite-fg",
+        product_variant_id: variant.variant_id,
+        quantity: 1,
+      })),
+    },
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(".cart-count")).toHaveText("2");
+  await page.locator(".cart-button").click();
+  await page.locator(`[data-variant-cart-line="${variants[0].variant_id}"]`).getByRole("button", { name: /Increase/ }).click();
+  await expect(page.locator(`[data-variant-cart-line="${variants[0].variant_id}"] .cart-controls strong`)).toHaveText("2");
+  await page.locator(`[data-variant-cart-line="${variants[1].variant_id}"]`).getByRole("button", { name: /Decrease/ }).click();
+  await expect(page.locator(`[data-variant-cart-line="${variants[1].variant_id}"]`)).toHaveCount(0);
+
+  const calls = await page.evaluate(() => window.__attractionSupabaseTestState.rpcs);
+  expect(calls.find((call) => call.name === "set_cart_item_v2")?.payload.p_quantity).toBe(2);
+  expect(calls.find((call) => call.name === "remove_cart_item_v2")?.payload.p_product_variant_id).toBe(variants[1].variant_id);
+  expect(calls.filter((call) => ["set_cart_item", "remove_cart_item"].includes(call.name))).toEqual([]);
+});
+
+test("clear_cart_v2 clears resolved rows without deleting authenticated legacy rows", async ({ page }) => {
+  const user = { id: "variant-clear-user", email: "clear@example.test", user_metadata: {} };
+  const variants = createVariantRows("predator-elite-fg", ["UK 6", "UK 7"]);
+  await installSupabaseStub(page, {
+    user,
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: variants,
+    cloudVariantCarts: { [user.id]: [{ product_id: "predator-elite-fg", product_variant_id: variants[0].variant_id, quantity: 1 }] },
+    legacyVariantCarts: { [user.id]: [{ product_id: "phantom-control-pro", quantity: 2 }] },
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await page.locator(".cart-button").click();
+  await page.getByRole("button", { name: "Clear Cart", exact: true }).click();
+  await expect(page.locator("[data-variant-cart-line]")).toHaveCount(0);
+  await expect(page.locator('[data-legacy-cart-line="phantom-control-pro"]')).toBeVisible();
+  const state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(state.cloudVariantCarts[user.id]).toEqual([]);
+  expect(state.legacyVariantCarts[user.id]).toEqual([{ product_id: "phantom-control-pro", quantity: 2 }]);
+  expect(state.rpcs.some((call) => call.name === "clear_cart")).toBe(false);
+});
+
+test("authenticated legacy cart resolves automatic variants once", async ({ page }) => {
+  const user = { id: "legacy-auto-user", email: "legacy-auto@example.test", user_metadata: {} };
+  const [variant] = createVariantRows("premier-match-ball", ["Size 5"]);
+  await installSupabaseStub(page, {
+    user,
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: [variant],
+    legacyVariantCarts: { [user.id]: [{ product_id: "premier-match-ball", quantity: 3 }] },
+    catalog: { "premier-match-ball": { id: "premier-match-ball", name: "Premier Match Ball", category: "Footballs", price: 89.99, image: "", is_active: true } },
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(".cart-count")).toHaveText("3");
+  await page.locator(".cart-button").click();
+  await expect(page.locator(`[data-variant-cart-line="${variant.variant_id}"]`)).toContainText("Size: Size 5");
+  const calls = await page.evaluate(() => window.__attractionSupabaseTestState.rpcs.filter((call) => call.name === "resolve_legacy_cart_item_v2"));
+  expect(calls).toHaveLength(1);
+});
+
+test("multi-size authenticated legacy cart requires explicit selection and retry cannot increment twice", async ({ page }) => {
+  const user = { id: "legacy-select-user", email: "legacy-select@example.test", user_metadata: {} };
+  const variants = createVariantRows("predator-elite-fg", ["UK 8", "UK 9"]);
+  await installSupabaseStub(page, {
+    user,
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: variants,
+    legacyVariantCarts: { [user.id]: [{ product_id: "predator-elite-fg", quantity: 2 }] },
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await page.locator(".cart-button").click();
+  const legacy = page.locator('[data-legacy-cart-line="predator-elite-fg"]');
+  await expect(legacy).toContainText("Size selection required");
+  await legacy.locator("[data-legacy-variant-select]").selectOption(variants[1].variant_id);
+  await legacy.getByRole("button", { name: "Use Selected Size" }).click();
+  await expect(page.locator(`[data-variant-cart-line="${variants[1].variant_id}"] .cart-controls strong`)).toHaveText("2");
+  await page.evaluate(({ productId, variantId }) => window.__attractionSupabaseClient.rpc("resolve_legacy_cart_item_v2", {
+    p_product_id: productId,
+    p_product_variant_id: variantId,
+  }), { productId: "predator-elite-fg", variantId: variants[1].variant_id });
+  expect(await page.evaluate((userId) => window.__attractionSupabaseTestState.cloudVariantCarts[userId][0].quantity, user.id)).toBe(2);
+});
+
+test("legacy item with no active variant stays visible and removable", async ({ page }) => {
+  const user = { id: "legacy-unavailable-user", email: "legacy-unavailable@example.test", user_metadata: {} };
+  await installSupabaseStub(page, {
+    user,
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: [],
+    legacyVariantCarts: { [user.id]: [{ product_id: "predator-elite-fg", quantity: 1 }] },
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await page.locator(".cart-button").click();
+  const legacy = page.locator('[data-legacy-cart-line="predator-elite-fg"]');
+  await expect(legacy).toContainText("Currently unavailable");
+  await legacy.getByRole("button", { name: /Remove Predator Elite FG/ }).click();
+  await expect(legacy).toHaveCount(0);
+});
+
+test("guest legacy conversion is partial, automatic for one variant, and explicit for multiple sizes", async ({ page }) => {
+  const ballVariant = createVariantRows("premier-match-ball", ["Size 5"])[0];
+  const shoeVariants = createVariantRows("predator-elite-fg", ["UK 8", "UK 9"]);
+  await page.addInitScript(() => {
+    localStorage.setItem("attractionCart:guest", JSON.stringify([
+      { id: "premier-match-ball", name: "Premier Match Ball", category: "Footballs", price: 89.99, image: "", qty: 2 },
+      { id: "predator-elite-fg", name: "Predator Elite FG", category: "Football Shoes", price: 219.99, image: "", qty: 1 },
+    ]));
+  });
+  await installSupabaseStub(page, {
+    user: null,
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: [ballVariant, ...shoeVariants],
+    catalog: { "premier-match-ball": { id: "premier-match-ball", name: "Premier Match Ball", category: "Footballs", price: 89.99, image: "", is_active: true } },
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await page.locator(".cart-button").click();
+  await expect(page.locator(`[data-variant-cart-line="${ballVariant.variant_id}"]`)).toBeVisible();
+  const legacy = page.locator('[data-legacy-cart-line="predator-elite-fg"]');
+  await expect(legacy).toContainText("Size selection required");
+  let oldStorage = await page.evaluate(() => JSON.parse(localStorage.getItem("attractionCart:guest")));
+  expect(oldStorage.map((item) => item.id)).toEqual(["predator-elite-fg"]);
+  await legacy.locator("[data-legacy-variant-select]").selectOption(shoeVariants[0].variant_id);
+  await legacy.getByRole("button", { name: "Use Selected Size" }).click();
+  await expect(page.locator(`[data-variant-cart-line="${shoeVariants[0].variant_id}"]`)).toBeVisible();
+  oldStorage = await page.evaluate(() => JSON.parse(localStorage.getItem("attractionCart:guest")));
+  expect(oldStorage).toEqual([]);
+});
+
+test("guest V2 merge is idempotent, reuses its token after failure, and never calls the V1 merge", async ({ page }) => {
+  const user = { id: "variant-merge-user", email: "merge@example.test", user_metadata: {} };
+  const [variant] = createVariantRows("predator-elite-fg", ["UK 8"]);
+  await page.addInitScript(({ variantId }) => {
+    localStorage.setItem("attractionCartV2:guest", JSON.stringify([{
+      productId: "predator-elite-fg",
+      productVariantId: variantId,
+      quantity: 2,
+    }]));
+  }, { variantId: variant.variant_id });
+  await installSupabaseStub(page, {
+    user: null,
+    usersByEmail: { [user.email]: user },
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: [variant],
+    failVariantMergeAttempts: 1,
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await loginAs(page, user.email);
+  await expect(page.locator(".cart-count")).toHaveText("2");
+  const firstToken = await page.evaluate((userId) => JSON.parse(localStorage.getItem(`attractionCartV2MergeToken:${userId}:resolved`)).token, user.id);
+  await logoutCurrentUser(page);
+  await loginAs(page, user.email);
+  await expect(page.locator(".cart-count")).toHaveText("2");
+  const mergeCalls = await page.evaluate(() => window.__attractionSupabaseTestState.rpcs.filter((call) => call.name === "merge_guest_cart_v2"));
+  expect(mergeCalls).toHaveLength(2);
+  expect(mergeCalls[0].payload.p_merge_token).toBe(firstToken);
+  expect(mergeCalls[1].payload.p_merge_token).toBe(firstToken);
+  expect(await page.evaluate(() => localStorage.getItem("attractionCartV2:guest"))).toBeNull();
+  expect(await page.evaluate(() => window.__attractionSupabaseTestState.rpcs.some((call) => call.name === "merge_guest_cart"))).toBe(false);
+});
+
+test("unresolved guest lines stay device-local across login and logout never exposes the cloud cart", async ({ page }) => {
+  const user = { id: "variant-isolation-user", email: "isolation@example.test", user_metadata: {} };
+  const variants = createVariantRows("predator-elite-fg", ["UK 8", "UK 9"]);
+  await page.addInitScript(() => {
+    localStorage.setItem("attractionCart:guest", JSON.stringify([{
+      id: "predator-elite-fg",
+      name: "Predator Elite FG",
+      category: "Football Shoes",
+      price: 219.99,
+      image: "",
+      qty: 1,
+    }]));
+  });
+  await installSupabaseStub(page, {
+    user: null,
+    usersByEmail: { [user.email]: user },
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: variants,
+    cloudVariantCarts: { [user.id]: [{ product_id: "predator-elite-fg", product_variant_id: variants[0].variant_id, quantity: 3 }] },
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await loginAs(page, user.email);
+  await expect(page.locator(".cart-count")).toHaveText("4");
+  await page.locator(".cart-button").click();
+  await expect(page.locator('[data-legacy-cart-line="predator-elite-fg"]')).toContainText("Size selection required");
+  await page.locator("[data-close-cart]").click();
+  await logoutCurrentUser(page);
+  await expect(page.locator(".cart-count")).toHaveText("1");
+  await page.locator(".cart-button").click();
+  await expect(page.locator("[data-variant-cart-line]")).toHaveCount(0);
+  await expect(page.locator('[data-legacy-cart-line="predator-elite-fg"]')).toBeVisible();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("attractionCart:guest")))).toHaveLength(1);
+});
+
+test("guest legacy selection after login reuses a persistent token when merge retry is needed", async ({ page }) => {
+  const user = { id: "legacy-guest-retry-user", email: "legacy-retry@example.test", user_metadata: {} };
+  const variants = createVariantRows("predator-elite-fg", ["UK 8", "UK 9"]);
+  await page.addInitScript(() => {
+    localStorage.setItem("attractionCart:guest", JSON.stringify([{
+      id: "predator-elite-fg", name: "Predator Elite FG", category: "Football Shoes", price: 219.99, image: "", qty: 2,
+    }]));
+  });
+  await installSupabaseStub(page, {
+    user: null,
+    usersByEmail: { [user.email]: user },
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: variants,
+    failVariantMergeAttempts: 1,
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await loginAs(page, user.email);
+  await page.locator(".cart-button").click();
+  let legacy = page.locator('[data-legacy-cart-line="predator-elite-fg"]');
+  await legacy.locator("[data-legacy-variant-select]").selectOption(variants[1].variant_id);
+  await legacy.getByRole("button", { name: "Use Selected Size" }).click();
+  await expect(legacy).toBeVisible();
+  legacy = page.locator('[data-legacy-cart-line="predator-elite-fg"]');
+  await legacy.locator("[data-legacy-variant-select]").selectOption(variants[1].variant_id);
+  await legacy.getByRole("button", { name: "Use Selected Size" }).click();
+  await expect(page.locator(`[data-variant-cart-line="${variants[1].variant_id}"] .cart-controls strong`)).toHaveText("2");
+  const calls = await page.evaluate(() => window.__attractionSupabaseTestState.rpcs.filter((call) => call.name === "merge_guest_cart_v2"));
+  expect(calls).toHaveLength(2);
+  expect(calls[1].payload.p_merge_token).toBe(calls[0].payload.p_merge_token);
+});
+
+test("authenticated inactive variant lines remain visible and removable", async ({ page }) => {
+  const user = { id: "inactive-variant-user", email: "inactive@example.test", user_metadata: {} };
+  const [variant] = createVariantRows("predator-elite-fg", ["UK 8"]);
+  await installSupabaseStub(page, {
+    user,
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: [variant],
+    cloudVariantCarts: { [user.id]: [{
+      product_id: "predator-elite-fg",
+      product_variant_id: variant.variant_id,
+      quantity: 1,
+      variant_is_active: false,
+      purchasable_quantity: 0,
+      stock_state: "Unavailable",
+    }] },
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await page.locator(".cart-button").click();
+  const line = page.locator(`[data-variant-cart-line="${variant.variant_id}"]`);
+  await expect(line).toContainText("Unavailable");
+  await expect(line.getByRole("button", { name: /Increase/ })).toBeDisabled();
+  await line.getByRole("button", { name: /Decrease/ }).click();
+  await expect(line).toHaveCount(0);
+});
+
+test("V2 RPC failure preserves visible cart data and exposes only a safe retry message", async ({ page }) => {
+  const user = { id: "variant-failure-user", email: "failure@example.test", user_metadata: {} };
+  const [variant] = createVariantRows("predator-elite-fg", ["UK 8"]);
+  await installSupabaseStub(page, {
+    user,
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: [variant],
+    cloudVariantCarts: { [user.id]: [{ product_id: "predator-elite-fg", product_variant_id: variant.variant_id, quantity: 1 }] },
+    failVariantCartRpc: "set_cart_item_v2",
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await page.locator(".cart-button").click();
+  await page.locator(`[data-variant-cart-line="${variant.variant_id}"]`).getByRole("button", { name: /Increase/ }).click();
+  await expect(page.locator(".toast")).toContainText("We could not sync your cart");
+  await expect(page.locator(`[data-variant-cart-line="${variant.variant_id}"] .cart-controls strong`)).toHaveText("1");
+  await expect(page.locator("body")).not.toContainText("Private variant cart failure");
+});
+
+test("variant mode blocks checkout and place_order while wishlist remains product-level", async ({ page }) => {
+  const variants = createVariantRows("predator-elite-fg", ["UK 8", "UK 9"]);
+  await installSupabaseStub(page, { user: null, variantUi: true, variantCartV2: true, variantRows: variants });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  const card = page.locator('.product-card[data-product-id="predator-elite-fg"]');
+  await card.locator(".wish").click();
+  await expect(page.locator(".wishlist-count").first()).toHaveText("1");
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("attractionWishlist:guest"))[0].id)).toBe("predator-elite-fg");
+  await expect(card.getByRole("button", { name: "Add to Cart" })).toBeDisabled();
+  await card.getByRole("button", { name: "UK 8", exact: true }).click();
+  await card.getByRole("button", { name: "Add to Cart" }).click();
+  await page.locator(".cart-button").click();
+  await expect(page.locator(".variant-checkout-message")).toHaveText("Variant checkout is not enabled yet");
+  await expect(page.getByRole("button", { name: "Checkout", exact: true })).toBeDisabled();
+  expect(await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderCalls)).toEqual([]);
+});
+
+test("variant cart drawer is accessible and has no mobile horizontal overflow", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const variants = createVariantRows("predator-elite-fg", ["UK 8", "UK 9"]);
+  await installSupabaseStub(page, { user: null, variantUi: true, variantCartV2: true, variantRows: variants });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  const card = page.locator('.product-card[data-product-id="predator-elite-fg"]');
+  await expect(card.getByRole("group", { name: "Select size for Predator Elite FG" })).toBeVisible();
+  await card.getByRole("button", { name: "UK 8", exact: true }).click();
+  await card.getByRole("button", { name: "Add to Cart" }).click();
+  await page.locator(".cart-button").click();
+  await expect(page.locator(".variant-cart-status")).toHaveAttribute("aria-live", "polite");
+  await expect(page.locator('[data-variant-cart-change="-1"]')).toHaveAttribute("aria-label", /Decrease Predator Elite FG UK 8/);
+  await expectNoHorizontalOverflow(page);
+});
+
+test("V2 checkout handler blocks direct invocation before every order or cart RPC", async ({ page }) => {
+  await exposeCheckoutTestHooks(page);
+  const user = { id: "direct-checkout-user", email: "direct-checkout@example.test", user_metadata: {} };
+  await installSupabaseStub(page, {
+    user,
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: createVariantRows("predator-elite-fg", ["UK 8"]),
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+
+  const prevented = await page.evaluate(async () => {
+    window.__phase2A3CheckoutTestHooks.createCheckoutModal();
+    const form = document.querySelector("[data-checkout-form]");
+    let wasPrevented = false;
+    await window.__phase2A3CheckoutTestHooks.handleCheckoutSubmit({
+      currentTarget: form,
+      preventDefault() {
+        wasPrevented = true;
+      },
+    });
+    return wasPrevented;
+  });
+
+  expect(prevented).toBe(true);
+  await expect(page.locator("[data-checkout-error]")).toHaveText("Variant checkout is not enabled yet");
+  const state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(state.rpcs.filter((call) => ["place_order", "clear_cart", "clear_cart_v2"].includes(call.name))).toEqual([]);
+});
+
+test("V2 checkout form submission is prevented before validation or COD handling", async ({ page }) => {
+  await exposeCheckoutTestHooks(page);
+  await installSupabaseStub(page, {
+    user: { id: "form-checkout-user", email: "form-checkout@example.test", user_metadata: {} },
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: createVariantRows("predator-elite-fg", ["UK 8"]),
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+
+  const submissionWasPrevented = await page.evaluate(() => {
+    window.__phase2A3CheckoutTestHooks.createCheckoutModal();
+    const form = document.querySelector("[data-checkout-form]");
+    return form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })) === false;
+  });
+
+  expect(submissionWasPrevented).toBe(true);
+  await expect(page.locator("[data-checkout-error]")).toHaveText("Variant checkout is not enabled yet");
+  expect(await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderCalls)).toEqual([]);
+});
+
+test("failed guest merge lines stay local through quantity and removal changes without V2 mutations", async ({ page }) => {
+  const user = { id: "pending-merge-user", email: "pending-merge@example.test", user_metadata: {} };
+  const variants = createVariantRows("predator-elite-fg", ["UK 8", "UK 9"]);
+  await page.addInitScript(({ firstVariantId, secondVariantId }) => {
+    localStorage.setItem("attractionCartV2:guest", JSON.stringify([
+      { productId: "predator-elite-fg", productVariantId: firstVariantId, quantity: 2 },
+      { productId: "predator-elite-fg", productVariantId: secondVariantId, quantity: 1 },
+    ]));
+  }, { firstVariantId: variants[0].variant_id, secondVariantId: variants[1].variant_id });
+  await installSupabaseStub(page, {
+    user: null,
+    usersByEmail: { [user.email]: user },
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: variants,
+    failVariantMergeAttempts: 1,
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await loginAs(page, user.email);
+  await page.locator(".cart-button").click();
+
+  const firstPending = page.locator(`[data-variant-cart-line="${variants[0].variant_id}"][data-variant-cart-source="pending-guest-v2"]`);
+  const secondPending = page.locator(`[data-variant-cart-line="${variants[1].variant_id}"][data-variant-cart-source="pending-guest-v2"]`);
+  await expect(firstPending).toContainText("Waiting for synchronization");
+  await firstPending.getByRole("button", { name: /Increase/ }).click();
+  await secondPending.getByRole("button", { name: /Decrease/ }).click();
+  await expect(secondPending).toHaveCount(0);
+
+  let state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(state.rpcs.filter((call) => ["set_cart_item_v2", "remove_cart_item_v2"].includes(call.name))).toEqual([]);
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("attractionCartV2:guest")))).toEqual([{
+    productId: "predator-elite-fg",
+    productVariantId: variants[0].variant_id,
+    quantity: 3,
+  }]);
+
+  await page.locator("[data-close-cart]").click();
+  await logoutCurrentUser(page);
+  await loginAs(page, user.email);
+  state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(state.cloudVariantCarts[user.id]).toEqual([{
+    product_id: "predator-elite-fg",
+    product_variant_id: variants[0].variant_id,
+    quantity: 3,
+  }]);
+  const mergeCalls = state.rpcs.filter((call) => call.name === "merge_guest_cart_v2");
+  expect(mergeCalls).toHaveLength(2);
+  expect(mergeCalls[1].payload.p_merge_token).not.toBe(mergeCalls[0].payload.p_merge_token);
+});
+
+test("guest V2 clear preserves unresolved legacy guest lines", async ({ page }) => {
+  const ballVariant = createVariantRows("premier-match-ball", ["Size 5"])[0];
+  const shoeVariants = createVariantRows("predator-elite-fg", ["UK 8", "UK 9"]);
+  await page.addInitScript(({ ballVariantId }) => {
+    localStorage.setItem("attractionCartV2:guest", JSON.stringify([{
+      productId: "premier-match-ball",
+      productVariantId: ballVariantId,
+      quantity: 1,
+    }]));
+    localStorage.setItem("attractionCart:guest", JSON.stringify([{
+      id: "predator-elite-fg", name: "Predator Elite FG", category: "Football Shoes", price: 219.99, image: "", qty: 2,
+    }]));
+  }, { ballVariantId: ballVariant.variant_id });
+  await installSupabaseStub(page, {
+    user: null,
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: [ballVariant, ...shoeVariants],
+    catalog: { "premier-match-ball": { id: "premier-match-ball", name: "Premier Match Ball", category: "Footballs", price: 89.99, image: "", is_active: true } },
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await page.locator(".cart-button").click();
+  await page.getByRole("button", { name: "Clear Cart", exact: true }).click();
+
+  expect(await page.evaluate(() => localStorage.getItem("attractionCartV2:guest"))).toBeNull();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("attractionCart:guest")))).toHaveLength(1);
+  await expect(page.locator('[data-legacy-cart-line="predator-elite-fg"]')).toBeVisible();
+  await expect(page.locator(".toast")).toHaveText("Resolved variant items cleared. Legacy items still require attention.");
+});
+
+test("guest legacy conversion restores exact state when legacy persistence fails", async ({ page }) => {
+  const [variant] = createVariantRows("premier-match-ball", ["Size 5"]);
+  await page.addInitScript(({ variantId }) => {
+    localStorage.setItem("attractionCartV2:guest", JSON.stringify([{
+      productId: "premier-match-ball", productVariantId: variantId, quantity: 2,
+    }]));
+    localStorage.setItem("attractionCart:guest", JSON.stringify([{
+      id: "premier-match-ball", name: "Premier Match Ball", category: "Footballs", price: 89.99, image: "", qty: 3,
+    }]));
+    const originalSetItem = Storage.prototype.setItem;
+    let failed = false;
+    Storage.prototype.setItem = function setItem(key, value) {
+      if (!failed && key === "attractionCart:guest" && value === "[]") {
+        failed = true;
+        throw new Error("Simulated legacy storage failure");
+      }
+      return originalSetItem.call(this, key, value);
+    };
+  }, { variantId: variant.variant_id });
+  await installSupabaseStub(page, {
+    user: null,
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: [variant],
+    catalog: { "premier-match-ball": { id: "premier-match-ball", name: "Premier Match Ball", category: "Footballs", price: 89.99, image: "", is_active: true } },
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await expect(page.locator(".cart-count")).toHaveText("5");
+
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("attractionCartV2:guest")))).toEqual([{
+    productId: "premier-match-ball", productVariantId: variant.variant_id, quantity: 2,
+  }]);
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem("attractionCart:guest")))).toEqual([{
+    id: "premier-match-ball", name: "Premier Match Ball", category: "Footballs", price: 89.99, image: "", qty: 3,
+  }]);
+});
+
+test("completed guest merge retains its token until local payload deletion succeeds", async ({ page }) => {
+  const user = { id: "cleanup-retry-user", email: "cleanup-retry@example.test", user_metadata: {} };
+  const [variant] = createVariantRows("predator-elite-fg", ["UK 8"]);
+  await page.addInitScript(({ variantId }) => {
+    localStorage.setItem("attractionCartV2:guest", JSON.stringify([{
+      productId: "predator-elite-fg", productVariantId: variantId, quantity: 2,
+    }]));
+    const originalRemoveItem = Storage.prototype.removeItem;
+    let failed = false;
+    Storage.prototype.removeItem = function removeItem(key) {
+      if (!failed && key === "attractionCartV2:guest") {
+        failed = true;
+        throw new Error("Simulated payload cleanup failure");
+      }
+      return originalRemoveItem.call(this, key);
+    };
+  }, { variantId: variant.variant_id });
+  await installSupabaseStub(page, {
+    user: null,
+    usersByEmail: { [user.email]: user },
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: [variant],
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await loginAs(page, user.email);
+
+  const tokenKey = `attractionCartV2MergeToken:${user.id}:resolved`;
+  const firstToken = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)).token, tokenKey);
+  expect(await page.evaluate(() => localStorage.getItem("attractionCartV2:guest"))).not.toBeNull();
+  expect(await page.evaluate((key) => localStorage.getItem(key), tokenKey)).not.toBeNull();
+
+  await logoutCurrentUser(page);
+  await loginAs(page, user.email);
+  const state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  const calls = state.rpcs.filter((call) => call.name === "merge_guest_cart_v2");
+  expect(calls).toHaveLength(2);
+  expect(calls[0].payload.p_merge_token).toBe(firstToken);
+  expect(calls[1].payload.p_merge_token).toBe(firstToken);
+  expect(state.cloudVariantCarts[user.id][0].quantity).toBe(2);
+  expect(await page.evaluate(() => localStorage.getItem("attractionCartV2:guest"))).toBeNull();
+});
+
+test("V2 auth switching ignores stale User A cart responses and shows only User B", async ({ page }) => {
+  const userA = { id: "variant-user-a", email: "variant-user-a@example.test", user_metadata: {} };
+  const userB = { id: "variant-user-b", email: "variant-user-b@example.test", user_metadata: {} };
+  const [variantA] = createVariantRows("predator-elite-fg", ["UK 8"]);
+  const [variantB] = createVariantRows("phantom-control-pro", ["UK 9"]);
+  await installSupabaseStub(page, {
+    user: userA,
+    usersByEmail: { [userB.email]: userB },
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: [variantA, variantB],
+    variantCartLoadDelays: { [userA.id]: 500 },
+    cloudVariantCarts: {
+      [userA.id]: [{ product_id: "predator-elite-fg", product_variant_id: variantA.variant_id, quantity: 4 }],
+      [userB.id]: [{ product_id: "phantom-control-pro", product_variant_id: variantB.variant_id, quantity: 2 }],
+    },
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await page.evaluate(async (email) => {
+    await window.__attractionSupabaseClient.auth.signOut();
+    await window.__attractionSupabaseClient.auth.signInWithPassword({ email, password: "valid-password" });
+  }, userB.email);
+
+  await expect(page.locator(".cart-count")).toHaveText("2");
+  await page.waitForTimeout(650);
+  await expect(page.locator(".cart-count")).toHaveText("2");
+  await page.locator(".cart-button").click();
+  await expect(page.locator(`[data-variant-cart-line="${variantB.variant_id}"]`)).toBeVisible();
+  await expect(page.locator(`[data-variant-cart-line="${variantA.variant_id}"]`)).toHaveCount(0);
+});
+
+test("rapid authenticated V2 quantity clicks serialize to the newest absolute quantity", async ({ page }) => {
+  const user = { id: "rapid-variant-user", email: "rapid-variant@example.test", user_metadata: {} };
+  const [variant] = createVariantRows("predator-elite-fg", ["UK 8"]);
+  await installSupabaseStub(page, {
+    user,
+    variantUi: true,
+    variantCartV2: true,
+    variantRows: [variant],
+    variantMutationDelay: 75,
+    cloudVariantCarts: { [user.id]: [{ product_id: "predator-elite-fg", product_variant_id: variant.variant_id, quantity: 1 }] },
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await page.locator(".cart-button").click();
+  const line = page.locator(`[data-variant-cart-line="${variant.variant_id}"]`);
+  await line.getByRole("button", { name: /Increase/ }).evaluate((button) => {
+    button.click();
+    button.click();
+  });
+
+  await expect(line.locator(".cart-controls strong")).toHaveText("3");
+  const calls = await page.evaluate(() => window.__attractionSupabaseTestState.rpcs
+    .filter((call) => call.name === "set_cart_item_v2")
+    .map((call) => call.payload.p_quantity));
+  expect(calls).toEqual([2, 3]);
 });
 
 test("cookie banner appears on first visit and saves consent preferences", async ({ page }) => {

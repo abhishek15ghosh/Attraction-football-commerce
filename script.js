@@ -13,6 +13,8 @@
     cart: "attractionCart",
     wishlist: "attractionWishlist",
     cartMergeToken: "attractionCartMergeToken",
+    variantCart: "attractionCartV2:guest",
+    variantCartMergeToken: "attractionCartV2MergeToken",
     cookieConsent: "attractionCookieConsent",
     cookiePreferences: "attractionCookiePreferences",
   };
@@ -31,6 +33,8 @@
       ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
       : null);
   const VARIANT_UI_ENABLED = window.__ATTRACTION_FEATURES__?.variantUi === true;
+  const VARIANT_CART_V2_ENABLED = VARIANT_UI_ENABLED
+    && window.__ATTRACTION_FEATURES__?.variantCartV2 === true;
   const VARIANT_STOCK_STATES = new Set(["In Stock", "Low Stock", "Out of Stock"]);
   const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const VARIANT_LABEL_ORDER = {
@@ -79,6 +83,9 @@
   };
 
   let cart = [];
+  let variantCart = [];
+  let pendingGuestMergeCart = [];
+  let legacyVariantCart = [];
   let wishlist = [];
   let productLookup = new Map();
   let activeCategory = "All";
@@ -86,12 +93,17 @@
   let currentSlide = 0;
   let authUser = null;
   let authReady = !supabaseClient;
+  let authStateGeneration = 0;
   let authSessionPromise = Promise.resolve();
   let collectionOwnerId = null;
   let collectionLoadVersion = 0;
   let collectionSyncOwnerId = null;
   let collectionSyncPromise = null;
   let cartMutationQueue = Promise.resolve();
+  const variantCartMutationQueues = new Map();
+  let variantCartLoadVersion = 0;
+  let variantCartErrorLogged = false;
+  const automaticLegacyResolutions = new Set();
   let wishlistMutationQueue = Promise.resolve();
   let customerOrders = [];
   let myOrdersLoadVersion = 0;
@@ -260,7 +272,7 @@
     if (addButton) {
       addButton.disabled = true;
       addButton.setAttribute("aria-disabled", "true");
-      addButton.textContent = "Variant cart not enabled yet";
+      addButton.textContent = VARIANT_CART_V2_ENABLED ? "Add to Cart" : "Variant cart not enabled yet";
     }
 
     let selector = $("[data-variant-selector]", card);
@@ -290,6 +302,7 @@
     const productName = getProductFromCard(card).name;
     const options = $(".variant-selector__options", selector);
     const message = $(".variant-selector__message", selector);
+    const addButton = $(".js-add-cart", card);
     const state = variantLoadStateByProductId.get(productId) || "loading";
     options.setAttribute("aria-label", `Select size for ${productName}`);
     options.setAttribute("aria-busy", String(state === "loading"));
@@ -297,11 +310,13 @@
     if (state === "loading") {
       options.innerHTML = "";
       message.textContent = "Loading size options...";
+      if (addButton) addButton.disabled = true;
       return;
     }
     if (state === "error") {
       options.innerHTML = "";
       message.textContent = "Variant options are unavailable.";
+      if (addButton) addButton.disabled = true;
       return;
     }
 
@@ -309,6 +324,7 @@
     if (!variants.length) {
       options.innerHTML = "";
       message.textContent = "Currently unavailable";
+      if (addButton) addButton.disabled = true;
       return;
     }
 
@@ -353,29 +369,29 @@
       const selected = variants.find((variant) => variant.variantId === selectedVariantId);
       message.textContent = `Selected: ${selected?.variantLabel || ""}`;
     } else message.textContent = "Select an available size.";
+
+    if (addButton) {
+      const canAdd = VARIANT_CART_V2_ENABLED && Boolean(selectedVariantId);
+      addButton.disabled = !canAdd;
+      addButton.setAttribute("aria-disabled", String(!canAdd));
+      addButton.textContent = VARIANT_CART_V2_ENABLED ? "Add to Cart" : "Variant cart not enabled yet";
+    }
   }
 
   function renderVariantCardsForProduct(productId) {
     $$(`.product-card[data-product-id="${CSS.escape(productId)}"]`).forEach(renderVariantCard);
   }
 
-  async function hydrateVariantCards(root = document) {
-    if (!VARIANT_UI_ENABLED) return;
-    document.body.classList.add("variant-preview-enabled");
-    const cards = getVariantCards(root);
-    const productIds = [...new Set(cards.map((card) => String(card.dataset.productId || "").trim()).filter(Boolean))];
-    if (!productIds.length) return;
-
-    cards.forEach((card) => {
-      const productId = String(card.dataset.productId || "").trim();
+  async function loadStorefrontVariants(productIds) {
+    if (!VARIANT_UI_ENABLED) return false;
+    const uniqueIds = [...new Set(productIds.map((id) => String(id || "").trim()).filter(Boolean))];
+    uniqueIds.forEach((productId) => {
       if (!variantLoadStateByProductId.has(productId)) variantLoadStateByProductId.set(productId, "loading");
-      renderVariantCard(card);
     });
-
-    const pendingIds = productIds.filter((productId) => variantLoadStateByProductId.get(productId) === "loading"
+    const pendingIds = uniqueIds.filter((productId) => variantLoadStateByProductId.get(productId) === "loading"
       && !variantsByProductId.has(productId)
       && !pendingVariantProductIds.has(productId));
-    if (!pendingIds.length) return;
+    if (!pendingIds.length) return true;
     pendingIds.forEach((productId) => pendingVariantProductIds.add(productId));
 
     if (!supabaseClient) {
@@ -386,7 +402,7 @@
         variantLoadErrorLogged = true;
         console.error("Variant options are unavailable.");
       }
-      return;
+      return false;
     }
 
     const requestedIds = new Set(pendingIds);
@@ -416,6 +432,12 @@
         pendingVariantProductIds.delete(productId);
         renderVariantCardsForProduct(productId);
       });
+      if (VARIANT_CART_V2_ENABLED) {
+        hydrateGuestVariantCartDetails();
+        renderCartItems();
+        void resolveAutomaticGuestLegacyItems();
+      }
+      return true;
     } catch (error) {
       pendingIds.forEach((productId) => variantLoadStateByProductId.set(productId, "error"));
       pendingIds.forEach((productId) => pendingVariantProductIds.delete(productId));
@@ -424,7 +446,25 @@
         variantLoadErrorLogged = true;
         console.error("Variant options are unavailable.");
       }
+      return false;
     }
+  }
+
+  async function hydrateVariantCards(root = document) {
+    if (!VARIANT_UI_ENABLED) return;
+    document.body.classList.add("variant-preview-enabled");
+    if (VARIANT_CART_V2_ENABLED) document.body.classList.add("variant-cart-v2-enabled");
+    const cards = getVariantCards(root);
+    const productIds = [...new Set(cards.map((card) => String(card.dataset.productId || "").trim()).filter(Boolean))];
+    if (!productIds.length) return;
+
+    cards.forEach((card) => {
+      const productId = String(card.dataset.productId || "").trim();
+      if (!variantLoadStateByProductId.has(productId)) variantLoadStateByProductId.set(productId, "loading");
+      renderVariantCard(card);
+    });
+
+    await loadStorefrontVariants(productIds);
   }
 
   function getStorageOwnerId(user = authUser) {
@@ -651,6 +691,410 @@
     }
   }
 
+  function getVariantById(productId, variantId) {
+    return (variantsByProductId.get(productId) || [])
+      .find((variant) => variant.variantId === variantId) || null;
+  }
+
+  function getVariantProduct(productId) {
+    return productLookup.get(productId) || {
+      id: productId,
+      name: productId.replace(/-/g, " "),
+      category: "Product",
+      price: 0,
+      image: "",
+    };
+  }
+
+  function normalizeGuestVariantCartItems(items) {
+    if (!VARIANT_CART_V2_ENABLED || !Array.isArray(items)) return [];
+    const normalized = [];
+    const ownership = new Map();
+
+    items.forEach((rawItem) => {
+      if (!rawItem || typeof rawItem !== "object") return;
+      const productId = String(rawItem.productId || "").trim();
+      const productVariantId = String(rawItem.productVariantId || "").trim();
+      const quantity = Number.parseInt(rawItem.quantity, 10);
+      if (!productId || !UUID_PATTERN.test(productVariantId) || !Number.isInteger(quantity)) return;
+      if (ownership.has(productVariantId) && ownership.get(productVariantId) !== productId) return;
+      ownership.set(productVariantId, productId);
+
+      const safeQuantity = Math.min(MAX_CART_QUANTITY, Math.max(1, quantity));
+      const existing = normalized.find((item) => item.productVariantId === productVariantId);
+      if (existing) {
+        existing.quantity = Math.min(MAX_CART_QUANTITY, existing.quantity + safeQuantity);
+        return;
+      }
+      normalized.push({ productId, productVariantId, quantity: safeQuantity });
+    });
+
+    return normalized;
+  }
+
+  function hydrateGuestVariantLine(item, source = "guest-v2") {
+    const product = getVariantProduct(item.productId);
+    const variant = getVariantById(item.productId, item.productVariantId);
+    const variantState = variantLoadStateByProductId.get(item.productId);
+    return {
+      productId: item.productId,
+      productVariantId: item.productVariantId,
+      variantSku: variant?.sku || "",
+      variantLabel: variant?.variantLabel || "Selected option",
+      name: product.name,
+      category: product.category,
+      price: normalizePrice(product.price),
+      image: product.image || "",
+      quantity: item.quantity,
+      productIsActive: true,
+      variantIsActive: Boolean(variant),
+      purchasableQuantity: variant?.purchasableQuantity ?? 0,
+      availabilityState: variant?.stockState || (variantState === "loading" ? "Loading" : "Unavailable"),
+      source,
+    };
+  }
+
+  function hydrateGuestVariantCartDetails() {
+    if (!VARIANT_CART_V2_ENABLED || authUser?.id) return;
+    variantCart = normalizeGuestVariantCartItems(variantCart).map(hydrateGuestVariantLine);
+    updateCartCount();
+  }
+
+  function serializeGuestVariantCart(items = variantCart) {
+    return normalizeGuestVariantCartItems(items).map((item) => ({
+      productId: item.productId,
+      productVariantId: item.productVariantId,
+      quantity: item.quantity,
+    }));
+  }
+
+  function saveGuestVariantCart() {
+    if (!VARIANT_CART_V2_ENABLED) return false;
+    if (authUser?.id) {
+      console.error("Refused to store an authenticated variant cart in localStorage.");
+      return false;
+    }
+    const storedItems = serializeGuestVariantCart();
+    const saved = writeStorage(STORAGE_KEYS.variantCart, storedItems);
+    if (saved) variantCart = storedItems.map(hydrateGuestVariantLine);
+    updateCartCount();
+    renderCartItems();
+    return saved;
+  }
+
+  function loadPendingGuestMergeCart(userId) {
+    if (!VARIANT_CART_V2_ENABLED || authUser?.id !== userId) return [];
+    return normalizeGuestVariantCartItems(readStorage(STORAGE_KEYS.variantCart, []))
+      .map((item) => hydrateGuestVariantLine(item, "pending-guest-v2"));
+  }
+
+  function savePendingGuestMergeCart(userId) {
+    if (!VARIANT_CART_V2_ENABLED || authUser?.id !== userId) return false;
+    const storedItems = serializeGuestVariantCart(pendingGuestMergeCart);
+    const saved = writeStorage(STORAGE_KEYS.variantCart, storedItems);
+    if (saved) {
+      pendingGuestMergeCart = storedItems
+        .map((item) => hydrateGuestVariantLine(item, "pending-guest-v2"));
+    }
+    updateCartCount();
+    renderCartItems();
+    return saved;
+  }
+
+  function normalizeCloudVariantCartRows(rows) {
+    if (!Array.isArray(rows)) return [];
+    return rows.flatMap((row) => {
+      const productId = String(row?.product_id || "").trim();
+      const productVariantId = String(row?.product_variant_id || "").trim();
+      const quantity = Number.parseInt(row?.quantity, 10);
+      if (!productId || !UUID_PATTERN.test(productVariantId) || !Number.isInteger(quantity)) return [];
+      return [{
+        productId,
+        productVariantId,
+        variantSku: String(row.variant_sku || ""),
+        variantLabel: String(row.variant_label || "Selected option"),
+        name: String(row.product_name || productId.replace(/-/g, " ")),
+        category: String(row.category || "Product"),
+        price: normalizePrice(row.unit_price),
+        image: String(row.image || ""),
+        quantity: Math.min(MAX_CART_QUANTITY, Math.max(1, quantity)),
+        productIsActive: row.product_is_active === true,
+        variantIsActive: row.variant_is_active === true,
+        purchasableQuantity: Math.min(MAX_CART_QUANTITY, Math.max(0, Number(row.purchasable_quantity) || 0)),
+        availabilityState: String(row.stock_state || "Unavailable"),
+        source: "authenticated-v2",
+      }];
+    });
+  }
+
+  function normalizeLegacyVariantCartRows(rows, source) {
+    if (!Array.isArray(rows)) return [];
+    return rows.flatMap((row) => {
+      const productId = String(row?.product_id ?? row?.id ?? "").trim();
+      const quantity = Number.parseInt(row?.quantity ?? row?.qty, 10);
+      if (!productId || !Number.isInteger(quantity)) return [];
+      const product = getVariantProduct(productId);
+      return [{
+        source,
+        productId,
+        name: String(row.product_name || row.name || product.name),
+        category: String(row.category || product.category),
+        price: normalizePrice(row.unit_price ?? row.price ?? product.price),
+        image: String(row.image || product.image || ""),
+        quantity: Math.min(MAX_CART_QUANTITY, Math.max(1, quantity)),
+        productIsActive: row.product_is_active !== false,
+        activeVariantCount: Number.parseInt(row.active_variant_count, 10) || 0,
+        automaticVariantId: String(row.automatic_variant_id || ""),
+        automaticVariantSku: String(row.automatic_variant_sku || ""),
+        automaticVariantLabel: String(row.automatic_variant_label || ""),
+        resolutionStatus: String(row.resolution_status || ""),
+      }];
+    });
+  }
+
+  function getGuestLegacyVariantLines() {
+    if (!VARIANT_CART_V2_ENABLED) return [];
+    return normalizeLegacyVariantCartRows(
+      normalizeCartItems(readStorage(getCartStorageKey(null), [])),
+      "guest-legacy"
+    );
+  }
+
+  function showVariantCartSyncError(error) {
+    if (!variantCartErrorLogged) {
+      variantCartErrorLogged = true;
+      console.error("Variant cart synchronization failed", error);
+    }
+    showToast("We could not sync your cart. Please try again.");
+  }
+
+  async function loadAuthenticatedVariantCart(expectedUserId, { showError = true, resolveAutomatic = true } = {}) {
+    if (!VARIANT_CART_V2_ENABLED || !supabaseClient || !expectedUserId) return false;
+    const version = ++variantCartLoadVersion;
+    try {
+      const [cartResult, legacyResult] = await Promise.all([
+        supabaseClient.rpc("get_cart_v2"),
+        supabaseClient.rpc("get_legacy_cart_items_v2"),
+      ]);
+      if (cartResult.error) throw cartResult.error;
+      if (legacyResult.error) throw legacyResult.error;
+      if (authUser?.id !== expectedUserId || version !== variantCartLoadVersion) return false;
+
+      variantCart = normalizeCloudVariantCartRows(cartResult.data);
+      legacyVariantCart = [
+        ...normalizeLegacyVariantCartRows(legacyResult.data, "authenticated-legacy"),
+        ...getGuestLegacyVariantLines(),
+      ];
+      variantCartErrorLogged = false;
+      updateCartCount();
+      renderCartItems();
+      const legacyProductIds = legacyVariantCart
+        .filter((item) => item.resolutionStatus !== "Automatic")
+        .map((item) => item.productId);
+      if (legacyProductIds.length) void loadStorefrontVariants(legacyProductIds);
+      if (resolveAutomatic) void resolveAutomaticAuthenticatedLegacyItems(expectedUserId);
+      return true;
+    } catch (error) {
+      if (showError && authUser?.id === expectedUserId) showVariantCartSyncError(error);
+      else console.error("Variant cart synchronization failed", error);
+      return false;
+    }
+  }
+
+  function loadGuestVariantCollections() {
+    if (!VARIANT_CART_V2_ENABLED) return;
+    variantCart = normalizeGuestVariantCartItems(readStorage(STORAGE_KEYS.variantCart, []))
+      .map(hydrateGuestVariantLine);
+    legacyVariantCart = getGuestLegacyVariantLines();
+    const productIds = [...variantCart, ...legacyVariantCart].map((item) => item.productId);
+    updateCartCount();
+    renderCartItems();
+    if (productIds.length) {
+      void loadStorefrontVariants(productIds).then(() => {
+        hydrateGuestVariantCartDetails();
+        renderCartItems();
+        return resolveAutomaticGuestLegacyItems();
+      });
+    }
+  }
+
+  function getVariantMergeTokenKey(userId, source = "resolved") {
+    return `${STORAGE_KEYS.variantCartMergeToken}:${userId}:${source}`;
+  }
+
+  function getVariantMergeSignature(items) {
+    return JSON.stringify([...items]
+      .sort((first, second) => first.productVariantId.localeCompare(second.productVariantId))
+      .map((item) => [item.productId, item.productVariantId, item.quantity]));
+  }
+
+  function removeMergedGuestVariantPayload(items) {
+    const mergedVariantIds = new Set(items.map((item) => item.productVariantId));
+    const currentItems = normalizeGuestVariantCartItems(readStorage(STORAGE_KEYS.variantCart, []));
+    const remainingItems = currentItems.filter((item) => !mergedVariantIds.has(item.productVariantId));
+    const persisted = remainingItems.length
+      ? writeStorage(STORAGE_KEYS.variantCart, remainingItems)
+      : removeStorage(STORAGE_KEYS.variantCart);
+    if (!persisted) return false;
+
+    const verifiedItems = normalizeGuestVariantCartItems(readStorage(STORAGE_KEYS.variantCart, []));
+    return verifiedItems.every((item) => !mergedVariantIds.has(item.productVariantId));
+  }
+
+  async function mergeGuestVariantCartToCloud(userId) {
+    if (!VARIANT_CART_V2_ENABLED || !supabaseClient || !userId) {
+      return { ok: false, serverMerged: false };
+    }
+    const items = normalizeGuestVariantCartItems(readStorage(STORAGE_KEYS.variantCart, []));
+    if (!items.length) {
+      const payloadRemoved = !hasStorageKey(STORAGE_KEYS.variantCart)
+        || removeStorage(STORAGE_KEYS.variantCart);
+      if (payloadRemoved) removeStorage(getVariantMergeTokenKey(userId));
+      return { ok: payloadRemoved, serverMerged: false };
+    }
+
+    const signature = getVariantMergeSignature(items);
+    const tokenKey = getVariantMergeTokenKey(userId);
+    let receipt = readStorage(tokenKey, null);
+    if (!receipt || receipt.signature !== signature || !UUID_PATTERN.test(String(receipt.token || ""))) {
+      receipt = { token: crypto.randomUUID(), signature };
+      if (!writeStorage(tokenKey, receipt)) return { ok: false, serverMerged: false };
+    }
+
+    const { error } = await supabaseClient.rpc("merge_guest_cart_v2", {
+      p_items: items,
+      p_merge_token: receipt.token,
+    });
+    if (error) {
+      console.error("Variant guest cart merge failed", error);
+      return { ok: false, serverMerged: false };
+    }
+
+    if (!removeMergedGuestVariantPayload(items)) {
+      console.error("Variant guest cart merged, but its local payload could not be removed safely.");
+      return { ok: false, serverMerged: true };
+    }
+    removeStorage(tokenKey);
+    return { ok: true, serverMerged: true };
+  }
+
+  function removeGuestLegacyStorageItem(productId) {
+    const current = normalizeCartItems(readStorage(getCartStorageKey(null), []));
+    const next = current.filter((item) => item.id !== productId);
+    return writeStorage(getCartStorageKey(null), next);
+  }
+
+  async function resolveGuestLegacyLine(line, variantId) {
+    const variant = getVariantById(line.productId, variantId);
+    if (!variant || variant.purchasableQuantity < 1) {
+      showToast("Selected option is unavailable.");
+      return false;
+    }
+
+    if (authUser?.id) {
+      const userId = authUser.id;
+      const items = [{ productId: line.productId, productVariantId: variant.variantId, quantity: line.quantity }];
+      const signature = getVariantMergeSignature(items);
+      const tokenKey = getVariantMergeTokenKey(userId, `legacy:${line.productId}`);
+      let receipt = readStorage(tokenKey, null);
+      if (!receipt || receipt.signature !== signature || !UUID_PATTERN.test(String(receipt.token || ""))) {
+        receipt = { token: crypto.randomUUID(), signature };
+        if (!writeStorage(tokenKey, receipt)) return false;
+      }
+      const { error } = await supabaseClient.rpc("merge_guest_cart_v2", {
+        p_items: items,
+        p_merge_token: receipt.token,
+      });
+      if (error || authUser?.id !== userId) {
+        if (error && authUser?.id === userId) showVariantCartSyncError(error);
+        return false;
+      }
+      if (!removeGuestLegacyStorageItem(line.productId)) return false;
+      removeStorage(tokenKey);
+      return loadAuthenticatedVariantCart(userId, { resolveAutomatic: false });
+    }
+
+    const previousCart = serializeGuestVariantCart(variantCart)
+      .map((item) => hydrateGuestVariantLine(item));
+    const existing = variantCart.find((item) => item.productVariantId === variant.variantId);
+    variantCart = existing
+      ? variantCart.map((item) => (item.productVariantId === variant.variantId
+        ? { ...item, quantity: Math.min(MAX_CART_QUANTITY, item.quantity + line.quantity) }
+        : item))
+      : [...variantCart, hydrateGuestVariantLine({
+        productId: line.productId,
+        productVariantId: variant.variantId,
+        quantity: line.quantity,
+      })];
+    if (!saveGuestVariantCart() || !removeGuestLegacyStorageItem(line.productId)) {
+      variantCart = previousCart;
+      saveGuestVariantCart();
+      return false;
+    }
+    legacyVariantCart = getGuestLegacyVariantLines();
+    updateCartCount();
+    renderCartItems();
+    return true;
+  }
+
+  async function resolveAuthenticatedLegacyLine(line, variantId) {
+    const userId = authUser?.id;
+    if (!VARIANT_CART_V2_ENABLED || !userId || !supabaseClient) return false;
+    try {
+      const { error } = await supabaseClient.rpc("resolve_legacy_cart_item_v2", {
+        p_product_id: line.productId,
+        p_product_variant_id: variantId,
+      });
+      if (error) throw error;
+      if (authUser?.id !== userId) return false;
+      return loadAuthenticatedVariantCart(userId, { resolveAutomatic: false });
+    } catch (error) {
+      if (authUser?.id === userId) showVariantCartSyncError(error);
+      return false;
+    }
+  }
+
+  async function resolveLegacyVariantLine(line, variantId) {
+    if (!line || !UUID_PATTERN.test(String(variantId || ""))) return false;
+    return line.source === "authenticated-legacy"
+      ? resolveAuthenticatedLegacyLine(line, variantId)
+      : resolveGuestLegacyLine(line, variantId);
+  }
+
+  async function resolveAutomaticAuthenticatedLegacyItems(userId) {
+    if (!VARIANT_CART_V2_ENABLED || authUser?.id !== userId) return;
+    const automatic = legacyVariantCart.filter((item) => item.source === "authenticated-legacy"
+      && item.resolutionStatus === "Automatic"
+      && UUID_PATTERN.test(item.automaticVariantId));
+    for (const line of automatic) {
+      const key = `${userId}:${line.productId}`;
+      if (automaticLegacyResolutions.has(key)) continue;
+      automaticLegacyResolutions.add(key);
+      try {
+        await resolveAuthenticatedLegacyLine(line, line.automaticVariantId);
+      } finally {
+        automaticLegacyResolutions.delete(key);
+      }
+    }
+  }
+
+  async function resolveAutomaticGuestLegacyItems() {
+    if (!VARIANT_CART_V2_ENABLED) return;
+    const automatic = legacyVariantCart.filter((item) => item.source === "guest-legacy")
+      .filter((item) => (variantsByProductId.get(item.productId) || []).length === 1);
+    for (const line of automatic) {
+      const variant = (variantsByProductId.get(line.productId) || [])[0];
+      const key = `guest:${line.productId}`;
+      if (!variant || automaticLegacyResolutions.has(key)) continue;
+      automaticLegacyResolutions.add(key);
+      try {
+        await resolveGuestLegacyLine(line, variant.variantId);
+      } finally {
+        automaticLegacyResolutions.delete(key);
+      }
+    }
+  }
+
   async function migrateCartStorageKey(userId, storageKey, source) {
     const items = normalizeCartItems(readStorage(storageKey, []));
     const tokenKey = getCartMergeTokenKey(userId, source);
@@ -727,6 +1171,33 @@
     return migrated;
   }
 
+  function migrateLegacyWishlistToGuest() {
+    const wishlistStorageKey = getWishlistStorageKey(null);
+    [LEGACY_STORAGE_KEYS.wishlist].forEach((legacyKey) => {
+      const legacyWishlist = normalizeWishlistItems(readStorage(legacyKey, []));
+      if (legacyWishlist.length) {
+        const migrated = mergeWishlistItems(readStorage(wishlistStorageKey, []), legacyWishlist);
+        if (writeStorage(wishlistStorageKey, migrated)) removeStorage(legacyKey);
+      } else if (hasStorageKey(legacyKey)) removeStorage(legacyKey);
+    });
+  }
+
+  function loadGuestWishlistOnly({ migrateLegacy = true } = {}) {
+    if (migrateLegacy) migrateLegacyWishlistToGuest();
+    wishlist = normalizeWishlistItems(readStorage(getWishlistStorageKey(null), []));
+    updateWishlistUI();
+  }
+
+  async function migrateWishlistCollectionsToCloud(user) {
+    if (!supabaseClient || !user?.id) return false;
+    const results = [];
+    results.push(await migrateWishlistStorageKey(user.id, getWishlistStorageKey(user)));
+    results.push(await migrateWishlistStorageKey(user.id, getWishlistStorageKey(null)));
+    results.push(await migrateWishlistStorageKey(user.id, LEGACY_STORAGE_KEYS.wishlist));
+    results.push(await migrateWishlistStorageKey(user.id, `${LEGACY_STORAGE_KEYS.wishlist}:${user.id}`));
+    return results.every(Boolean);
+  }
+
   function loadGuestCollections({ migrateLegacy = true } = {}) {
     if (migrateLegacy) migrateLegacyStorageToGuest();
     collectionOwnerId = GUEST_STORAGE_ID;
@@ -735,7 +1206,64 @@
     refreshCollectionUI();
   }
 
+  async function activateVariantCollectionOwner(user, { migrate = true } = {}) {
+    const expectedOwnerId = user?.id || GUEST_STORAGE_ID;
+    const version = ++collectionLoadVersion;
+    const ownerChanged = collectionOwnerId !== expectedOwnerId;
+    collectionOwnerId = expectedOwnerId;
+
+    if (ownerChanged) {
+      cart = [];
+      variantCart = [];
+      pendingGuestMergeCart = [];
+      legacyVariantCart = [];
+      wishlist = [];
+      refreshCollectionUI();
+    }
+
+    if (!user?.id) {
+      if (version !== collectionLoadVersion) return false;
+      loadGuestWishlistOnly({ migrateLegacy: migrate });
+      loadGuestVariantCollections();
+      return true;
+    }
+
+    let migrationsSucceeded = true;
+    let variantMigrated = true;
+    let variantMergeOutcome = { ok: true, serverMerged: false };
+    if (migrate) {
+      const migrationResults = await Promise.all([
+        mergeGuestVariantCartToCloud(user.id),
+        migrateWishlistCollectionsToCloud(user),
+      ]);
+      [variantMergeOutcome] = migrationResults;
+      variantMigrated = variantMergeOutcome.ok;
+      const wishlistMigrated = migrationResults[1];
+      migrationsSucceeded = variantMigrated && wishlistMigrated;
+      if (!migrationsSucceeded && authUser?.id === user.id) {
+        showToast("Some saved items could not sync. They will be retried after your next login.");
+      }
+    }
+    if (version !== collectionLoadVersion || authUser?.id !== user.id) return false;
+
+    const [cartLoaded, wishlistLoaded] = await Promise.all([
+      loadAuthenticatedVariantCart(user.id),
+      loadCloudWishlist(user.id),
+    ]);
+    pendingGuestMergeCart = !variantMigrated
+      && !variantMergeOutcome.serverMerged
+      && authUser?.id === user.id
+      ? loadPendingGuestMergeCart(user.id)
+      : [];
+    if (authUser?.id === user.id) {
+      updateCartCount();
+      renderCartItems();
+    }
+    return migrationsSucceeded && cartLoaded && wishlistLoaded;
+  }
+
   async function activateCollectionOwner(user, { migrate = true } = {}) {
+    if (VARIANT_CART_V2_ENABLED) return activateVariantCollectionOwner(user, { migrate });
     const expectedOwnerId = user?.id || GUEST_STORAGE_ID;
     const version = ++collectionLoadVersion;
     const ownerChanged = collectionOwnerId !== expectedOwnerId;
@@ -782,6 +1310,18 @@
     const pending = cartMutationQueue.then(operation, operation);
     cartMutationQueue = pending.catch(() => {});
     return pending;
+  }
+
+  function enqueueVariantCartMutation(productVariantId, operation) {
+    const previous = variantCartMutationQueues.get(productVariantId) || Promise.resolve();
+    const pending = previous.then(operation, operation);
+    const tracked = pending.catch(() => {});
+    variantCartMutationQueues.set(productVariantId, tracked);
+    return pending.finally(() => {
+      if (variantCartMutationQueues.get(productVariantId) === tracked) {
+        variantCartMutationQueues.delete(productVariantId);
+      }
+    });
   }
 
   function enqueueWishlistMutation(operation) {
@@ -1500,8 +2040,10 @@
       }
 
       productLookup.set(product.id, product);
-      if (VARIANT_UI_ENABLED) prepareVariantPreviewCard(card);
-      else addButton.addEventListener("click", () => addToCart(product));
+      if (VARIANT_UI_ENABLED) {
+        prepareVariantPreviewCard(card);
+        if (VARIANT_CART_V2_ENABLED) addButton.addEventListener("click", () => addToCart(product));
+      } else addButton.addEventListener("click", () => addToCart(product));
     });
   }
 
@@ -2603,7 +3145,10 @@
   }
 
   function updateCartCount() {
-    const count = cart.reduce((sum, item) => sum + item.qty, 0);
+    const count = VARIANT_CART_V2_ENABLED
+      ? [...variantCart, ...pendingGuestMergeCart, ...legacyVariantCart]
+        .reduce((sum, item) => sum + Number(item.quantity || 0), 0)
+      : cart.reduce((sum, item) => sum + item.qty, 0);
     if (cartCount) cartCount.textContent = String(count);
   }
 
@@ -2662,8 +3207,202 @@
     return loadCloudCart(userId, { showError: false });
   }
 
+  function isVariantLineUnavailable(item) {
+    return item.productIsActive === false
+      || item.variantIsActive === false
+      || ["Unavailable", "Out of Stock", "Loading"].includes(item.availabilityState);
+  }
+
+  async function setAuthenticatedVariantCartQuantity(userId, item, quantity) {
+    const rpcName = quantity > 0 ? "set_cart_item_v2" : "remove_cart_item_v2";
+    const payload = quantity > 0
+      ? {
+        p_product_id: item.productId,
+        p_product_variant_id: item.productVariantId,
+        p_quantity: quantity,
+      }
+      : { p_product_variant_id: item.productVariantId };
+    const { error } = await supabaseClient.rpc(rpcName, payload);
+    if (error) throw error;
+    if (authUser?.id !== userId) return false;
+    return loadAuthenticatedVariantCart(userId, { showError: false, resolveAutomatic: false });
+  }
+
+  async function addSelectedVariantToCart(product) {
+    const selectedVariantId = selectedVariantByProductId.get(product.id);
+    const variant = getVariantById(product.id, selectedVariantId);
+    if (!variant || variant.purchasableQuantity < 1) {
+      showToast(selectedVariantId ? "Selected option is unavailable." : "Please select a size.");
+      return;
+    }
+
+    await waitForAuthReady();
+    if (!authUser?.id) {
+      const existing = variantCart.find((item) => item.productVariantId === variant.variantId);
+      if (existing) existing.quantity = Math.min(MAX_CART_QUANTITY, existing.quantity + 1);
+      else variantCart.push(hydrateGuestVariantLine({
+        productId: product.id,
+        productVariantId: variant.variantId,
+        quantity: 1,
+      }));
+      if (saveGuestVariantCart()) showToast(`${product.name} · ${variant.variantLabel} added to cart`);
+      return;
+    }
+
+    const userId = authUser.id;
+    const pendingLocal = pendingGuestMergeCart
+      .find((item) => item.productVariantId === variant.variantId);
+    if (pendingLocal) {
+      const previousPending = pendingGuestMergeCart;
+      pendingGuestMergeCart = pendingGuestMergeCart.map((item) => (
+        item.productVariantId === variant.variantId
+          ? { ...item, quantity: Math.min(MAX_CART_QUANTITY, item.quantity + 1) }
+          : item
+      ));
+      if (!savePendingGuestMergeCart(userId)) {
+        pendingGuestMergeCart = previousPending;
+        updateCartCount();
+        renderCartItems();
+        showVariantCartSyncError(new Error("Pending guest cart could not be saved."));
+      } else {
+        showToast(`${product.name} · ${variant.variantLabel} is waiting for synchronization`);
+      }
+      return;
+    }
+
+    return enqueueVariantCartMutation(variant.variantId, async () => {
+      const existing = variantCart.find((item) => item.productVariantId === variant.variantId);
+      const quantity = Math.min(MAX_CART_QUANTITY, Number(existing?.quantity || 0) + 1);
+      try {
+        const reloaded = await setAuthenticatedVariantCartQuantity(userId, {
+          productId: product.id,
+          productVariantId: variant.variantId,
+        }, quantity);
+        if (!reloaded && authUser?.id === userId) {
+          showVariantCartSyncError(new Error("Variant cart changed but could not be reloaded."));
+          return;
+        }
+        if (authUser?.id === userId) showToast(`${product.name} · ${variant.variantLabel} added to cart`);
+      } catch (error) {
+        if (authUser?.id === userId) showVariantCartSyncError(error);
+        else console.error("Variant cart mutation failed after account change", error);
+      }
+    });
+  }
+
+  async function changeVariantCartQuantity(variantId, change, source = "authenticated-v2") {
+    await waitForAuthReady();
+    const pendingLocal = source === "pending-guest-v2"
+      ? pendingGuestMergeCart.find((item) => item.productVariantId === variantId)
+      : null;
+    const current = pendingLocal || variantCart.find((item) => item.productVariantId === variantId);
+    if (!current) return;
+    if (change > 0 && isVariantLineUnavailable(current)) {
+      showToast("This option is currently unavailable.");
+      return;
+    }
+
+    if (!authUser?.id) {
+      const quantity = Math.min(MAX_CART_QUANTITY, current.quantity + change);
+      variantCart = quantity > 0
+        ? variantCart.map((item) => (item.productVariantId === variantId ? { ...item, quantity } : item))
+        : variantCart.filter((item) => item.productVariantId !== variantId);
+      saveGuestVariantCart();
+      return;
+    }
+
+    const userId = authUser.id;
+    if (pendingLocal) {
+      const previousPending = pendingGuestMergeCart;
+      const quantity = Math.min(MAX_CART_QUANTITY, pendingLocal.quantity + change);
+      pendingGuestMergeCart = quantity > 0
+        ? pendingGuestMergeCart.map((item) => (item.productVariantId === variantId
+          ? { ...item, quantity }
+          : item))
+        : pendingGuestMergeCart.filter((item) => item.productVariantId !== variantId);
+      if (!savePendingGuestMergeCart(userId)) {
+        pendingGuestMergeCart = previousPending;
+        updateCartCount();
+        renderCartItems();
+        showVariantCartSyncError(new Error("Pending guest cart could not be saved."));
+      }
+      return;
+    }
+
+    return enqueueVariantCartMutation(variantId, async () => {
+      const latest = variantCart.find((item) => item.productVariantId === variantId);
+      if (!latest || authUser?.id !== userId) return;
+      const quantity = Math.min(MAX_CART_QUANTITY, latest.quantity + change);
+      try {
+        const reloaded = await setAuthenticatedVariantCartQuantity(userId, latest, quantity);
+        if (!reloaded && authUser?.id === userId) {
+          showVariantCartSyncError(new Error("Variant cart changed but could not be reloaded."));
+        }
+      } catch (error) {
+        if (authUser?.id === userId) showVariantCartSyncError(error);
+        else console.error("Variant cart quantity mutation failed after account change", error);
+      }
+    });
+  }
+
+  async function removeLegacyVariantLine(line) {
+    if (!line) return;
+    await waitForAuthReady();
+    if (line.source === "guest-legacy") {
+      if (removeGuestLegacyStorageItem(line.productId)) {
+        legacyVariantCart = legacyVariantCart.filter((item) => item !== line);
+        updateCartCount();
+        renderCartItems();
+      }
+      return;
+    }
+
+    const userId = authUser?.id;
+    if (!userId) return;
+    return enqueueCartMutation(async () => {
+      try {
+        const { error } = await supabaseClient.rpc("remove_cart_item", { p_product_id: line.productId });
+        if (error) throw error;
+        if (authUser?.id === userId) await loadAuthenticatedVariantCart(userId, { resolveAutomatic: false });
+      } catch (error) {
+        if (authUser?.id === userId) showVariantCartSyncError(error);
+      }
+    });
+  }
+
+  async function clearVariantCart() {
+    await waitForAuthReady();
+    if (!authUser?.id) {
+      variantCart = [];
+      removeStorage(STORAGE_KEYS.variantCart);
+      legacyVariantCart = getGuestLegacyVariantLines();
+      updateCartCount();
+      renderCartItems();
+      showToast(legacyVariantCart.length
+        ? "Resolved variant items cleared. Legacy items still require attention."
+        : "Cart cleared");
+      return;
+    }
+
+    const userId = authUser.id;
+    return enqueueCartMutation(async () => {
+      try {
+        const { error } = await supabaseClient.rpc("clear_cart_v2");
+        if (error) throw error;
+        if (authUser?.id !== userId) return;
+        await loadAuthenticatedVariantCart(userId, { showError: false, resolveAutomatic: false });
+        showToast(legacyVariantCart.length || pendingGuestMergeCart.length
+          ? "Variant cart cleared. Local or legacy items still need attention."
+          : "Cart cleared");
+      } catch (error) {
+        if (authUser?.id === userId) showVariantCartSyncError(error);
+      }
+    });
+  }
+
   async function addToCart(product) {
     if (!hasProductIdentity(product)) return;
+    if (VARIANT_CART_V2_ENABLED) return addSelectedVariantToCart(product);
     if (VARIANT_UI_ENABLED) {
       showToast("Variant cart not enabled yet");
       return;
@@ -2697,6 +3436,7 @@
   }
 
   async function changeCartQuantity(id, change) {
+    if (VARIANT_CART_V2_ENABLED) return changeVariantCartQuantity(id, change);
     if (VARIANT_UI_ENABLED) {
       showToast("Variant cart not enabled yet");
       return;
@@ -2732,6 +3472,7 @@
   }
 
   async function clearCurrentCart() {
+    if (VARIANT_CART_V2_ENABLED) return clearVariantCart();
     if (VARIANT_UI_ENABLED) {
       showToast("Variant cart not enabled yet");
       return;
@@ -3041,6 +3782,10 @@
   }
 
   async function openCheckout() {
+    if (VARIANT_CART_V2_ENABLED) {
+      showToast("Variant checkout is not enabled yet");
+      return;
+    }
     if (VARIANT_UI_ENABLED) {
       showToast("Variant cart not enabled yet");
       return;
@@ -3092,8 +3837,19 @@
   }
 
   async function handleCheckoutSubmit(event) {
-    event.preventDefault();
-    const form = event.currentTarget;
+    event?.preventDefault?.();
+    if (VARIANT_CART_V2_ENABLED) {
+      const blockedModal = event?.currentTarget?.closest?.(".checkout-modal") || $(".checkout-modal");
+      if (blockedModal) {
+        showCheckoutMessage(blockedModal, "error", "Variant checkout is not enabled yet");
+      } else {
+        showToast("Variant checkout is not enabled yet");
+      }
+      return false;
+    }
+
+    const form = event?.currentTarget;
+    if (!form) return false;
     const modal = form.closest(".checkout-modal");
     if (!modal) return;
 
@@ -3263,6 +4019,37 @@
 
     drawer.addEventListener("click", (event) => {
       if (event.target === drawer || event.target.matches("[data-close-cart]")) closeCart();
+      const variantQtyButton = event.target.closest("[data-variant-cart-change]");
+      if (variantQtyButton) {
+        changeVariantCartQuantity(
+          variantQtyButton.dataset.productVariantId,
+          Number(variantQtyButton.dataset.variantCartChange),
+          variantQtyButton.dataset.variantCartSource
+        );
+        return;
+      }
+      const legacyRemoveButton = event.target.closest("[data-remove-legacy-cart]");
+      if (legacyRemoveButton) {
+        const line = legacyVariantCart.find((item) => item.source === legacyRemoveButton.dataset.legacySource
+          && item.productId === legacyRemoveButton.dataset.productId);
+        if (line) removeLegacyVariantLine(line);
+        return;
+      }
+      const resolveButton = event.target.closest("[data-resolve-legacy-cart]");
+      if (resolveButton) {
+        const line = legacyVariantCart.find((item) => item.source === resolveButton.dataset.legacySource
+          && item.productId === resolveButton.dataset.productId);
+        const selector = resolveButton.closest(".variant-legacy-item")?.querySelector("[data-legacy-variant-select]");
+        if (!selector?.value) {
+          showToast("Please select a size.");
+          return;
+        }
+        resolveButton.disabled = true;
+        void resolveLegacyVariantLine(line, selector.value).finally(() => {
+          if (resolveButton.isConnected) resolveButton.disabled = false;
+        });
+        return;
+      }
       const qtyButton = event.target.closest("[data-cart-change]");
       if (qtyButton) changeCartQuantity(qtyButton.dataset.id, Number(qtyButton.dataset.cartChange));
       if (event.target.matches("[data-clear-cart]")) {
@@ -3290,6 +4077,11 @@
     const itemsContainer = $(".cart-items");
     const footer = $(".cart-footer");
     if (!itemsContainer || !footer) return;
+
+    if (VARIANT_CART_V2_ENABLED) {
+      renderVariantCartItems(itemsContainer, footer);
+      return;
+    }
 
     if (!cart.length) {
       itemsContainer.innerHTML = `<div class="empty-message">Your cart is empty. Add premium football gear from Top Picks.</div>`;
@@ -3319,6 +4111,97 @@
     footer.innerHTML = `
       <div class="cart-total"><span>Total</span><span>${money(total)}</span></div>
       <button class="cart-checkout" type="button" data-checkout>Checkout</button>
+      <button class="clear-cart-btn" type="button" data-clear-cart>Clear Cart</button>
+    `;
+  }
+
+  function getLegacyLineVariants(line) {
+    return (variantsByProductId.get(line.productId) || [])
+      .filter((variant) => variant.variantIsActive && variant.purchasableQuantity > 0);
+  }
+
+  function renderVariantResolvedLine(item) {
+    const unavailable = isVariantLineUnavailable(item);
+    const pendingMerge = item.source === "pending-guest-v2";
+    const statusClass = String(item.availabilityState || "Unavailable").toLowerCase().replace(/[^a-z]+/g, "-");
+    return `
+      <article class="cart-item variant-cart-item${pendingMerge ? " variant-cart-item--pending" : ""}"
+        data-variant-cart-line="${escapeHTML(item.productVariantId)}"
+        data-variant-cart-source="${escapeHTML(item.source || "authenticated-v2")}">
+        <div class="variant-cart-item__details">
+          <h4>${escapeHTML(item.name)}</h4>
+          <p>${escapeHTML(item.category)} · ${money(item.price)}</p>
+          <p class="variant-cart-item__selection">Size: <strong>${escapeHTML(item.variantLabel)}</strong></p>
+          <span class="variant-cart-state variant-cart-state--${statusClass}">${escapeHTML(item.availabilityState)}</span>
+          ${pendingMerge ? '<span class="variant-cart-sync-state" role="status">Waiting for synchronization</span>' : ""}
+        </div>
+        <div class="cart-controls">
+          <button type="button" data-product-variant-id="${escapeHTML(item.productVariantId)}" data-variant-cart-source="${escapeHTML(item.source || "authenticated-v2")}" data-variant-cart-change="-1" aria-label="Decrease ${escapeHTML(item.name)} ${escapeHTML(item.variantLabel)}">−</button>
+          <strong>${item.quantity}</strong>
+          <button type="button" data-product-variant-id="${escapeHTML(item.productVariantId)}" data-variant-cart-source="${escapeHTML(item.source || "authenticated-v2")}" data-variant-cart-change="1" aria-label="Increase ${escapeHTML(item.name)} ${escapeHTML(item.variantLabel)}" ${unavailable || item.quantity >= MAX_CART_QUANTITY ? "disabled" : ""}>+</button>
+        </div>
+      </article>
+    `;
+  }
+
+  function renderVariantLegacyLine(line) {
+    const variants = getLegacyLineVariants(line);
+    const automatic = line.resolutionStatus === "Automatic" && line.automaticVariantId;
+    const noActiveVariants = line.resolutionStatus === "No active variants"
+      || (variantLoadStateByProductId.get(line.productId) !== "loading" && variants.length === 0);
+    const options = variants.map((variant) => `
+      <option value="${escapeHTML(variant.variantId)}">${escapeHTML(variant.variantLabel)}</option>
+    `).join("");
+    const resolution = automatic
+      ? `<p class="variant-legacy-item__status" role="status">Resolving selected option...</p>`
+      : noActiveVariants
+        ? `<p class="variant-legacy-item__status">Currently unavailable</p>`
+        : `
+          <label class="variant-legacy-item__selector">
+            <span>Size selection required</span>
+            <select data-legacy-variant-select aria-label="Select size for ${escapeHTML(line.name)}">
+              <option value="">Select size</option>
+              ${options}
+            </select>
+          </label>
+          <button class="variant-legacy-item__resolve" type="button"
+            data-resolve-legacy-cart data-legacy-source="${escapeHTML(line.source)}"
+            data-product-id="${escapeHTML(line.productId)}">Use Selected Size</button>
+        `;
+    return `
+      <article class="cart-item variant-legacy-item" data-legacy-cart-line="${escapeHTML(line.productId)}">
+        <div>
+          <h4>${escapeHTML(line.name)}</h4>
+          <p>${escapeHTML(line.category)} · ${money(line.price)} · Qty ${line.quantity}</p>
+          ${resolution}
+        </div>
+        <button class="variant-legacy-item__remove" type="button"
+          data-remove-legacy-cart data-legacy-source="${escapeHTML(line.source)}"
+          data-product-id="${escapeHTML(line.productId)}"
+          aria-label="Remove ${escapeHTML(line.name)} from cart">Remove</button>
+      </article>
+    `;
+  }
+
+  function renderVariantCartItems(itemsContainer, footer) {
+    const allLines = [...variantCart, ...pendingGuestMergeCart, ...legacyVariantCart];
+    if (!allLines.length) {
+      itemsContainer.innerHTML = `<div class="empty-message">Your cart is empty. Add premium football gear from Top Picks.</div>`;
+      footer.innerHTML = "";
+      return;
+    }
+
+    itemsContainer.innerHTML = `
+      <div class="variant-cart-status" role="status" aria-live="polite">Variant cart preview</div>
+      ${variantCart.map(renderVariantResolvedLine).join("")}
+      ${pendingGuestMergeCart.map(renderVariantResolvedLine).join("")}
+      ${legacyVariantCart.map(renderVariantLegacyLine).join("")}
+    `;
+    const total = allLines.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
+    footer.innerHTML = `
+      <div class="cart-total"><span>Informational Total</span><span>${money(total)}</span></div>
+      <p class="variant-checkout-message" role="status">Variant checkout is not enabled yet</p>
+      <button class="cart-checkout" type="button" data-checkout disabled>Checkout</button>
       <button class="clear-cart-btn" type="button" data-clear-cart>Clear Cart</button>
     `;
   }
@@ -3756,7 +4639,11 @@
   async function initSupabaseAuth() {
     if (!supabaseClient) {
       authUser = null;
-      loadGuestCollections({ migrateLegacy: true });
+      if (VARIANT_CART_V2_ENABLED) {
+        collectionOwnerId = GUEST_STORAGE_ID;
+        loadGuestWishlistOnly({ migrateLegacy: true });
+        loadGuestVariantCollections();
+      } else loadGuestCollections({ migrateLegacy: true });
       authReady = true;
       updateAuthUI();
       return;
@@ -3765,26 +4652,37 @@
     authReady = false;
 
     try {
-      const { data, error } = await supabaseClient.auth.getSession();
-      if (error) throw error;
-      authUser = data?.session?.user || null;
-      await synchronizeCollectionOwner(authUser, { migrate: true });
-
       supabaseClient.auth.onAuthStateChange((event, session) => {
         void (async () => {
+          const generation = ++authStateGeneration;
           authReady = true;
           authUser = session?.user || null;
           resetCustomerOrdersForAuthChange();
           await synchronizeCollectionOwner(authUser, { migrate: true });
+          if (generation !== authStateGeneration) return;
           updateAuthUI();
           refreshAdminPageAccess();
           refreshMyOrdersPageAccess();
         })();
       });
+
+      const sessionRequestGeneration = authStateGeneration;
+      const { data, error } = await supabaseClient.auth.getSession();
+      if (error) throw error;
+      if (sessionRequestGeneration !== authStateGeneration) return;
+      const initialGeneration = ++authStateGeneration;
+      authUser = data?.session?.user || null;
+
+      await synchronizeCollectionOwner(authUser, { migrate: true });
+      if (initialGeneration !== authStateGeneration) return;
     } catch (error) {
       console.warn("Supabase auth session check failed", error);
       authUser = null;
-      loadGuestCollections({ migrateLegacy: true });
+      if (VARIANT_CART_V2_ENABLED) {
+        collectionOwnerId = GUEST_STORAGE_ID;
+        loadGuestWishlistOnly({ migrateLegacy: true });
+        loadGuestVariantCollections();
+      } else loadGuestCollections({ migrateLegacy: true });
     } finally {
       authReady = true;
       updateAuthUI();
