@@ -15,6 +15,7 @@
     cartMergeToken: "attractionCartMergeToken",
     variantCart: "attractionCartV2:guest",
     variantCartMergeToken: "attractionCartV2MergeToken",
+    variantCheckoutAttempt: "attractionCheckoutV2Attempt",
     cookieConsent: "attractionCookieConsent",
     cookiePreferences: "attractionCookiePreferences",
   };
@@ -35,6 +36,8 @@
   const VARIANT_UI_ENABLED = window.__ATTRACTION_FEATURES__?.variantUi === true;
   const VARIANT_CART_V2_ENABLED = VARIANT_UI_ENABLED
     && window.__ATTRACTION_FEATURES__?.variantCartV2 === true;
+  const VARIANT_CHECKOUT_V2_ENABLED = VARIANT_CART_V2_ENABLED
+    && window.__ATTRACTION_FEATURES__?.variantCheckoutV2 === true;
   const VARIANT_STOCK_STATES = new Set(["In Stock", "Low Stock", "Out of Stock"]);
   const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const VARIANT_LABEL_ORDER = {
@@ -102,6 +105,10 @@
   let cartMutationQueue = Promise.resolve();
   const variantCartMutationQueues = new Map();
   let variantCartLoadVersion = 0;
+  let variantCartAuthoritativeState = "idle";
+  let variantCartAuthoritativeUserId = null;
+  let variantCheckoutGeneration = 0;
+  let variantCheckoutResult = null;
   let variantCartErrorLogged = false;
   const automaticLegacyResolutions = new Set();
   let wishlistMutationQueue = Promise.resolve();
@@ -463,6 +470,7 @@
     if (!VARIANT_UI_ENABLED) return;
     document.body.classList.add("variant-preview-enabled");
     if (VARIANT_CART_V2_ENABLED) document.body.classList.add("variant-cart-v2-enabled");
+    if (VARIANT_CHECKOUT_V2_ENABLED) document.body.classList.add("variant-checkout-v2-enabled");
     const cards = getVariantCards(root);
     const productIds = [...new Set(cards.map((card) => String(card.dataset.productId || "").trim()).filter(Boolean))];
     if (!productIds.length) return;
@@ -755,6 +763,8 @@
       price: normalizePrice(product.price),
       image: product.image || "",
       quantity: item.quantity,
+      quantityRaw: String(item.quantity),
+      quantityIsValid: true,
       productIsActive: true,
       variantIsActive: Boolean(variant),
       purchasableQuantity: variant?.purchasableQuantity ?? 0,
@@ -815,8 +825,14 @@
     return rows.flatMap((row) => {
       const productId = String(row?.product_id || "").trim();
       const productVariantId = String(row?.product_variant_id || "").trim();
-      const quantity = Number.parseInt(row?.quantity, 10);
-      if (!productId || !UUID_PATTERN.test(productVariantId) || !Number.isInteger(quantity)) return [];
+      const rawQuantity = String(row?.quantity ?? "");
+      const quantity = Number(rawQuantity);
+      const quantityIsValid = rawQuantity === rawQuantity.trim()
+        && /^\d+$/.test(rawQuantity)
+        && Number.isSafeInteger(quantity)
+        && quantity >= 1
+        && quantity <= MAX_CART_QUANTITY;
+      if (!productId || !UUID_PATTERN.test(productVariantId)) return [];
       return [{
         productId,
         productVariantId,
@@ -826,7 +842,9 @@
         category: String(row.category || "Product"),
         price: normalizePrice(row.unit_price),
         image: String(row.image || ""),
-        quantity: Math.min(MAX_CART_QUANTITY, Math.max(1, quantity)),
+        quantity: quantityIsValid ? quantity : 0,
+        quantityRaw: rawQuantity,
+        quantityIsValid,
         productIsActive: row.product_is_active === true,
         variantIsActive: row.variant_is_active === true,
         purchasableQuantity: Math.min(MAX_CART_QUANTITY, Math.max(0, Number(row.purchasable_quantity) || 0)),
@@ -880,6 +898,9 @@
   async function loadAuthenticatedVariantCart(expectedUserId, { showError = true, resolveAutomatic = true } = {}) {
     if (!VARIANT_CART_V2_ENABLED || !supabaseClient || !expectedUserId) return false;
     const version = ++variantCartLoadVersion;
+    variantCartAuthoritativeState = "loading";
+    variantCartAuthoritativeUserId = expectedUserId;
+    renderCartItems();
     try {
       const [cartResult, legacyResult] = await Promise.all([
         supabaseClient.rpc("get_cart_v2"),
@@ -890,6 +911,8 @@
       if (authUser?.id !== expectedUserId || version !== variantCartLoadVersion) return false;
 
       variantCart = normalizeCloudVariantCartRows(cartResult.data);
+      variantCartAuthoritativeState = "ready";
+      variantCartAuthoritativeUserId = expectedUserId;
       legacyVariantCart = [
         ...normalizeLegacyVariantCartRows(legacyResult.data, "authenticated-legacy"),
         ...getGuestLegacyVariantLines(),
@@ -904,6 +927,11 @@
       if (resolveAutomatic) void resolveAutomaticAuthenticatedLegacyItems(expectedUserId);
       return true;
     } catch (error) {
+      if (authUser?.id === expectedUserId && version === variantCartLoadVersion) {
+        variantCartAuthoritativeState = "error";
+        variantCartAuthoritativeUserId = expectedUserId;
+        renderCartItems();
+      }
       if (showError && authUser?.id === expectedUserId) showVariantCartSyncError(error);
       else console.error("Variant cart synchronization failed", error);
       return false;
@@ -1226,6 +1254,8 @@
       variantCart = [];
       pendingGuestMergeCart = [];
       legacyVariantCart = [];
+      variantCartAuthoritativeState = "idle";
+      variantCartAuthoritativeUserId = user?.id || null;
       wishlist = [];
       refreshCollectionUI();
     }
@@ -3130,6 +3160,8 @@
                 <div>
                   <strong>${escapeHTML(item.product_name || "Product")}</strong>
                   <span>${escapeHTML(item.product_category || "Product")}</span>
+                  ${item.variant_label ? `<small>Size: ${escapeHTML(item.variant_label)}</small>` : ""}
+                  ${item.variant_sku ? `<small>SKU: ${escapeHTML(item.variant_sku)}</small>` : ""}
                   <small>${money(price)} × ${qty}</small>
                 </div>
                 <b>${money(price * qty)}</b>
@@ -3183,6 +3215,8 @@
                 <p>Payment Method: <strong>${escapeHTML(getOrderPaymentMethod(order.payment_method))}</strong></p>
                 <p>Payment Status: <strong data-admin-current-payment-status>${escapeHTML(paymentStatus)}</strong></p>
                 <p data-admin-payment-collected ${paymentCollectedAt ? "" : "hidden"}>Payment Collected At: <strong data-admin-payment-collected-value>${escapeHTML(paymentCollectedAt)}</strong></p>
+                ${order.inventory_deducted_at ? `<p>Inventory Deducted: <strong>${escapeHTML(formatOrderDate(order.inventory_deducted_at))}</strong></p>` : ""}
+                ${order.inventory_restored_at ? `<p>Inventory Restored: <strong>${escapeHTML(formatOrderDate(order.inventory_restored_at))}</strong></p>` : ""}
               </div>
             </div>
             <div class="admin-items-wrap">
@@ -3665,6 +3699,8 @@
             <div class="customer-order-item__copy">
               <strong>${escapeHTML(item.product_name || "Product")}</strong>
               <span>${escapeHTML(item.product_category || "Product")}</span>
+              ${item.variant_label ? `<small>Size: ${escapeHTML(item.variant_label)}</small>` : ""}
+              ${item.variant_sku ? `<small class="customer-order-item__sku">SKU: ${escapeHTML(item.variant_sku)}</small>` : ""}
               <small>${formatCustomerOrderMoney(price)} × ${quantity}</small>
             </div>
             <b>${formatCustomerOrderMoney(price * quantity)}</b>
@@ -3876,7 +3912,7 @@
 
     const { data, error } = await supabaseClient
       .from("orders")
-      .select("id,user_id,customer_name,customer_email,customer_phone,address,city,state,pin_code,note,total_amount,status,payment_method,payment_status,payment_collected_at,created_at,cancellation_request_status,cancellation_reason,cancellation_requested_at,cancellation_reviewed_at,cancellation_reviewed_by,cancellation_admin_note,cancelled_at,order_items(id,order_id,product_id,product_name,product_category,product_price,quantity,product_image)")
+      .select("id,user_id,customer_name,customer_email,customer_phone,address,city,state,pin_code,note,total_amount,status,payment_method,payment_status,payment_collected_at,created_at,inventory_deducted_at,inventory_restored_at,cancellation_request_status,cancellation_reason,cancellation_requested_at,cancellation_reviewed_at,cancellation_reviewed_by,cancellation_admin_note,cancelled_at,order_items(id,order_id,product_id,product_variant_id,variant_sku,variant_label,product_name,product_category,product_price,quantity,product_image)")
       .eq("user_id", userId)
       .order("created_at", { ascending: false });
 
@@ -4459,6 +4495,172 @@
     return cart.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.qty || 0), 0);
   }
 
+  // Phase 2B4 stays default-off until the 10-unit demo baseline is reconciled at cutover.
+  // Historical V1 orders are not variant allocations; after cutover V2 checkout deducts,
+  // approved V2 cancellation restores, and audited admin adjustments reconcile stock.
+  function getVariantCheckoutEligibility() {
+    if (!VARIANT_CHECKOUT_V2_ENABLED) {
+      return { eligible: false, reason: "Variant checkout is not enabled yet" };
+    }
+    if (!authReady) return { eligible: false, reason: "Checking your account and cart..." };
+    if (!authUser?.id) return { eligible: false, reason: "Please log in to continue." };
+    if (
+      collectionOwnerId !== authUser.id
+      || variantCartAuthoritativeUserId !== authUser.id
+      || variantCartAuthoritativeState === "loading"
+    ) {
+      return { eligible: false, reason: "Your cart is still synchronizing. Please wait." };
+    }
+    if (variantCartAuthoritativeState !== "ready") {
+      return { eligible: false, reason: "We could not verify your cart. Please refresh and try again." };
+    }
+    const localVariantPayload = readStorage(STORAGE_KEYS.variantCart, []);
+    if (pendingGuestMergeCart.length || (Array.isArray(localVariantPayload) && localVariantPayload.length)) {
+      return { eligible: false, reason: "Your saved cart is still synchronizing. Please wait." };
+    }
+    if (legacyVariantCart.length) {
+      return { eligible: false, reason: "Select an option for every saved product before checkout." };
+    }
+    if (!variantCart.length) return { eligible: false, reason: "Your cart is empty." };
+
+    for (const item of variantCart) {
+      if (item.source !== "authenticated-v2") {
+        return { eligible: false, reason: "Your cart is still synchronizing. Please wait." };
+      }
+      if (!item.quantityIsValid) {
+        return { eligible: false, reason: "Your cart contains an invalid quantity." };
+      }
+      if (!item.productIsActive) {
+        return { eligible: false, reason: "One or more products are unavailable." };
+      }
+      if (!item.variantIsActive || item.availabilityState === "Unavailable") {
+        return { eligible: false, reason: "One or more selected options are unavailable." };
+      }
+      if (item.availabilityState === "Out of Stock" || item.purchasableQuantity < 1) {
+        return { eligible: false, reason: "One or more selected options are out of stock." };
+      }
+      if (item.purchasableQuantity < item.quantity) {
+        return { eligible: false, reason: "The requested quantity is no longer available." };
+      }
+      if (!UUID_PATTERN.test(item.productVariantId) || !item.productId) {
+        return { eligible: false, reason: "Your cart contains an invalid item." };
+      }
+    }
+    return { eligible: true, reason: "Ready for secure checkout", items: [...variantCart] };
+  }
+
+  function getVariantCheckoutItems() {
+    return [...variantCart]
+      .sort((first, second) => first.productVariantId.localeCompare(second.productVariantId))
+      .map((item) => ({
+        product_id: item.productId,
+        product_variant_id: item.productVariantId,
+        quantity: item.quantity,
+      }));
+  }
+
+  function getVariantCheckoutShipping(form) {
+    const formData = new FormData(form);
+    const shipping = {
+      customer_name: String(formData.get("customer_name") || "").trim(),
+      customer_phone: String(formData.get("customer_phone") || "").trim(),
+      address: String(formData.get("address") || "").trim(),
+      city: String(formData.get("city") || "").trim(),
+      state: String(formData.get("state") || "").trim(),
+      pin_code: String(formData.get("pin_code") || "").trim(),
+    };
+    const note = String(formData.get("note") || "").trim();
+    if (note) shipping.note = note;
+    return shipping;
+  }
+
+  function getVariantCheckoutPayload(form) {
+    return {
+      userId: authUser?.id || "",
+      items: getVariantCheckoutItems(),
+      shipping: getVariantCheckoutShipping(form),
+    };
+  }
+
+  async function getPayloadFingerprint(payload) {
+    const bytes = new TextEncoder().encode(JSON.stringify(payload));
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  async function getVariantCheckoutAttempt(payload) {
+    const fingerprint = await getPayloadFingerprint(payload);
+    const stored = readStorage(STORAGE_KEYS.variantCheckoutAttempt, null);
+    if (
+      stored?.userId === payload.userId
+      && stored?.fingerprint === fingerprint
+      && UUID_PATTERN.test(String(stored.idempotencyKey || ""))
+    ) {
+      return { ...stored, fingerprint };
+    }
+    const attempt = {
+      userId: payload.userId,
+      fingerprint,
+      idempotencyKey: crypto.randomUUID(),
+    };
+    if (!writeStorage(STORAGE_KEYS.variantCheckoutAttempt, attempt)) {
+      throw new Error("The secure checkout attempt could not be prepared.");
+    }
+    return attempt;
+  }
+
+  function clearVariantCheckoutAttempt(userId, fingerprint = null) {
+    const stored = readStorage(STORAGE_KEYS.variantCheckoutAttempt, null);
+    if (!stored || stored.userId !== userId || (fingerprint && stored.fingerprint !== fingerprint)) return false;
+    return removeStorage(STORAGE_KEYS.variantCheckoutAttempt);
+  }
+
+  function getVariantCheckoutErrorMessage(error) {
+    const message = String(error?.message || "").toLowerCase();
+    if (message.includes("authentication") || message.includes("log in") || String(error?.code || "") === "42501") {
+      return "Please log in to continue.";
+    }
+    if (message.includes("cart changed")) return "Your cart changed. Please review it before trying again.";
+    if (message.includes("insufficient stock") || message.includes("quantity is no longer")) {
+      return "One or more selected options do not have enough stock.";
+    }
+    if (message.includes("variant") && (message.includes("unavailable") || message.includes("inactive"))) {
+      return "One or more selected options are unavailable.";
+    }
+    if (message.includes("product") && (message.includes("unavailable") || message.includes("inactive"))) {
+      return "One or more products are unavailable.";
+    }
+    if (message.includes("relationship") || message.includes("does not belong") || message.includes("invalid item")) {
+      return "Your cart contains an invalid item.";
+    }
+    if (message.includes("quantity") || message.includes("maximum")) return "Your cart contains an invalid quantity.";
+    if (message.includes("shipping") || message.includes("delivery") || message.includes("pin code")) {
+      return "Please check your delivery details.";
+    }
+    if (isVariantCheckoutIdempotencyConflict(error)) {
+      return "This checkout attempt could not be reused. Please review your cart and try again.";
+    }
+    return "We could not place your order. Please try again.";
+  }
+
+  function isVariantCheckoutIdempotencyConflict(error) {
+    const message = String(error?.message || "").toLowerCase();
+    const mentionsAttempt = message.includes("identifier") || message.includes("idempotency");
+    const confirmsConflict = message.includes("already used")
+      || message.includes("different order")
+      || message.includes("different checkout")
+      || message.includes("payload mismatch");
+    return mentionsAttempt && confirmsConflict;
+  }
+
+  function isVariantCheckoutRefreshError(error) {
+    const message = String(error?.message || "").toLowerCase();
+    return message.includes("cart changed")
+      || message.includes("insufficient stock")
+      || message.includes("unavailable")
+      || message.includes("inactive");
+  }
+
   function getCheckoutErrorMessage(error) {
     const message = String(error?.message || "").toLowerCase();
     const code = String(error?.code || "");
@@ -4512,7 +4714,10 @@
 
   function updateCheckoutSummary(modal) {
     const total = $("[data-checkout-total]", modal);
-    if (total) total.textContent = formatCheckoutMoney(getCartTotal());
+    const amount = VARIANT_CHECKOUT_V2_ENABLED
+      ? variantCart.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0)
+      : getCartTotal();
+    if (total) total.textContent = formatCheckoutMoney(amount);
   }
 
   function setCheckoutStep(modal, step) {
@@ -4543,21 +4748,32 @@
     if (!form || !items) return false;
 
     const formData = new FormData(form);
-    const checkoutCart = normalizeCartItems(cart);
+    const checkoutCart = VARIANT_CHECKOUT_V2_ENABLED
+      ? [...variantCart]
+      : normalizeCartItems(cart);
     if (!checkoutCart.length) return false;
 
     items.innerHTML = checkoutCart
-      .map((item) => `
+      .map((item) => {
+        const quantity = VARIANT_CHECKOUT_V2_ENABLED ? item.quantity : Number(item.qty || 1);
+        const productName = item.name;
+        const category = item.category;
+        const variantLabel = VARIANT_CHECKOUT_V2_ENABLED && item.variantLabel
+          ? `<small class="checkout-confirmation-item__variant">Size: ${escapeHTML(item.variantLabel)}</small>`
+          : "";
+        return `
         <article class="checkout-confirmation-item">
-          <img src="${escapeHTML(item.image || "assets/hero-football-boot.avif")}" alt="${escapeHTML(item.name)}" loading="lazy" decoding="async" />
+          <img src="${escapeHTML(item.image || "assets/hero-football-boot.avif")}" alt="${escapeHTML(productName)}" loading="lazy" decoding="async" />
           <div>
-            <strong>${escapeHTML(item.name)}</strong>
-            <span>${escapeHTML(item.category)}</span>
-            <small>Quantity: ${Number(item.qty || 1)}</small>
+            <strong>${escapeHTML(productName)}</strong>
+            <span>${escapeHTML(category)}</span>
+            ${variantLabel}
+            <small>Quantity: ${quantity}</small>
           </div>
-          <b>${formatCheckoutMoney(Number(item.price || 0) * Number(item.qty || 1))}</b>
+          <b>${formatCheckoutMoney(Number(item.price || 0) * quantity)}</b>
         </article>
-      `)
+      `;
+      })
       .join("");
 
     const address = [
@@ -4572,9 +4788,13 @@
     const payMessage = $("[data-cod-payment-message]", modal);
     if (phone) phone.textContent = String(formData.get("customer_phone") || "").trim();
     if (addressNode) addressNode.textContent = address;
-    if (total) total.textContent = formatCheckoutMoney(getCartTotal());
+    const checkoutTotal = checkoutCart.reduce((sum, item) => {
+      const quantity = VARIANT_CHECKOUT_V2_ENABLED ? item.quantity : Number(item.qty || 1);
+      return sum + Number(item.price || 0) * quantity;
+    }, 0);
+    if (total) total.textContent = formatCheckoutMoney(checkoutTotal);
     if (payMessage) {
-      payMessage.textContent = `You will pay ${formatCheckoutMoney(getCartTotal())} when the order is delivered.`;
+      payMessage.textContent = `You will pay ${formatCheckoutMoney(checkoutTotal)} when the order is delivered.`;
     }
     return true;
   }
@@ -4682,7 +4902,11 @@
               <div><dt>Total</dt><dd data-cod-success-total></dd></div>
               <div><dt>Payment Method</dt><dd data-cod-success-payment-method></dd></div>
               <div><dt>Payment Status</dt><dd data-cod-success-payment-status></dd></div>
+              <div data-v2-success-field hidden><dt>Order Status</dt><dd data-v2-success-order-status></dd></div>
+              <div data-v2-success-field hidden><dt>Items</dt><dd data-v2-success-item-count></dd></div>
+              <div data-v2-success-field hidden><dt>Inventory</dt><dd data-v2-success-inventory></dd></div>
             </dl>
+            <div class="checkout-success-variants" data-v2-success-variants hidden></div>
             <p>Please keep the order amount ready when your order is delivered.</p>
             <p class="checkout-success-cart-note" data-cod-success-cart-note hidden></p>
           </section>
@@ -4729,16 +4953,117 @@
     });
   }
 
+  function resetVariantCheckoutSuccess(modal) {
+    $$('[data-v2-success-field]', modal).forEach((field) => { field.hidden = true; });
+    const variants = $("[data-v2-success-variants]", modal);
+    if (variants) {
+      variants.hidden = true;
+      variants.innerHTML = "";
+    }
+    const note = $("[data-cod-success-cart-note]", modal);
+    if (note) {
+      note.hidden = true;
+      note.textContent = "";
+    }
+  }
+
+  function setVariantCheckoutPending(modal, pending) {
+    const form = $("[data-checkout-form]", modal);
+    if (!form) return;
+    form.dataset.submitting = String(pending);
+    form.setAttribute("aria-busy", String(pending));
+    modal.setAttribute("aria-busy", String(pending));
+    $$('input, textarea, button, select', modal).forEach((control) => {
+      if (pending) {
+        control.dataset.v2CheckoutWasDisabled = String(control.disabled);
+        control.disabled = true;
+      } else {
+        const wasDisabled = control.dataset.v2CheckoutWasDisabled === "true";
+        delete control.dataset.v2CheckoutWasDisabled;
+        control.disabled = wasDisabled;
+      }
+    });
+    if (!pending) {
+      const checkbox = $("[data-cod-confirm-checkbox]", modal);
+      const submit = $("[data-place-order]", modal);
+      if (submit) submit.disabled = !checkbox?.checked;
+    }
+  }
+
+  async function refreshVariantCheckoutState(userId, items) {
+    const productIds = [...new Set(items.map((item) => item.product_id))];
+    const cartReloaded = await loadAuthenticatedVariantCart(userId, {
+      showError: false,
+      resolveAutomatic: false,
+    });
+    if (authUser?.id !== userId) return false;
+    productIds.forEach((productId) => {
+      variantsByProductId.delete(productId);
+      variantLoadStateByProductId.set(productId, "loading");
+    });
+    await loadStorefrontVariants(productIds);
+    renderCartItems();
+    return cartReloaded;
+  }
+
+  function renderVariantCheckoutSuccess(modal, order, submittedLines, cartConfirmedCleared) {
+    const values = {
+      "[data-cod-success-order-id]": order.order_id,
+      "[data-cod-success-total]": formatCheckoutMoney(order.total_amount),
+      "[data-cod-success-payment-method]": getOrderPaymentMethod(order.payment_method),
+      "[data-cod-success-payment-status]": getOrderPaymentStatus(order.payment_status),
+      "[data-v2-success-order-status]": order.order_status,
+      "[data-v2-success-item-count]": `${Number(order.item_count)} ${Number(order.item_count) === 1 ? "item" : "items"}`,
+      "[data-v2-success-inventory]": order.inventory_deducted_at ? "Stock deducted" : "Confirmed by server",
+    };
+    Object.entries(values).forEach(([selector, value]) => {
+      const target = $(selector, modal);
+      if (target) target.textContent = value;
+    });
+    $$('[data-v2-success-field]', modal).forEach((field) => { field.hidden = false; });
+    const variants = $("[data-v2-success-variants]", modal);
+    if (variants) {
+      variants.hidden = false;
+      variants.innerHTML = `
+        <span>Selected Options</span>
+        <ul>${submittedLines.map((item) => `<li>${escapeHTML(item.name)} · ${escapeHTML(item.variantLabel)}</li>`).join("")}</ul>
+      `;
+    }
+    const cartNote = $("[data-cod-success-cart-note]", modal);
+    if (cartNote) {
+      cartNote.hidden = cartConfirmedCleared;
+      cartNote.textContent = cartConfirmedCleared
+        ? ""
+        : "Your order was placed, but the updated cart could not be confirmed. Refresh before ordering again.";
+    }
+    setCheckoutStep(modal, "success");
+  }
+
   async function openCheckout() {
     if (VARIANT_CART_V2_ENABLED) {
-      showToast("Variant checkout is not enabled yet");
-      return;
+      if (!VARIANT_CHECKOUT_V2_ENABLED) {
+        showToast("Variant checkout is not enabled yet");
+        return;
+      }
+      await waitForAuthReady();
+      if (!authUser) {
+        closeCart();
+        showToast("Please login to place your order");
+        await openLogin();
+        return;
+      }
+      const eligibility = getVariantCheckoutEligibility();
+      if (!eligibility.eligible) {
+        showToast(eligibility.reason);
+        return;
+      }
     }
     if (VARIANT_UI_ENABLED) {
-      showToast("Variant cart not enabled yet");
-      return;
-    }
-    if (!cart.length) {
+      if (!VARIANT_CART_V2_ENABLED) {
+        showToast("Variant cart not enabled yet");
+        return;
+      }
+    } else if (!cart.length) {
       showToast("Your cart is empty");
       return;
     }
@@ -4762,9 +5087,14 @@
     const form = $("[data-checkout-form]", modal);
     if (form) {
       form.reset();
-      form.dataset.checkoutToken = crypto.randomUUID();
+      if (!VARIANT_CHECKOUT_V2_ENABLED) form.dataset.checkoutToken = crypto.randomUUID();
+      else delete form.dataset.checkoutToken;
+      form.dataset.checkoutMode = VARIANT_CHECKOUT_V2_ENABLED ? "v2" : "v1";
+      delete form.dataset.reviewPayload;
       form.dataset.submitting = "false";
     }
+    variantCheckoutResult = null;
+    resetVariantCheckoutSuccess(modal);
     resetCheckoutMessage(modal);
     setCheckoutStep(modal, "details");
     prefillCheckoutForm(modal);
@@ -4778,15 +5108,151 @@
   function closeCheckout() {
     const modal = $(".checkout-modal");
     if (!modal) return;
+    if ($('[data-checkout-form]', modal)?.dataset.submitting === "true") return;
     modal.classList.remove("is-open");
     if (!$([".cart-drawer.is-open", ".wishlist-drawer.is-open", ".login-modal.is-open", ".search-modal.is-open"].join(","))) {
       document.body.classList.remove("no-scroll");
     }
   }
 
+  async function handleVariantCheckoutSubmit(event) {
+    event?.preventDefault?.();
+    const form = event?.currentTarget;
+    const modal = form?.closest?.(".checkout-modal");
+    if (!form || !modal) return false;
+    if (!VARIANT_CHECKOUT_V2_ENABLED) {
+      showCheckoutMessage(modal, "error", "Variant checkout is not enabled yet");
+      return false;
+    }
+    if (form.dataset.submitting === "true") return false;
+
+    resetCheckoutMessage(modal);
+    const eligibility = getVariantCheckoutEligibility();
+    if (!eligibility.eligible) {
+      showCheckoutMessage(modal, "error", eligibility.reason);
+      return false;
+    }
+
+    if (form.dataset.step !== "confirmation") {
+      if (!form.checkValidity()) {
+        showCheckoutMessage(modal, "error", "Please complete all required checkout fields.");
+        form.reportValidity();
+        return false;
+      }
+      const payload = getVariantCheckoutPayload(form);
+      if (!renderCheckoutConfirmation(modal)) {
+        showCheckoutMessage(modal, "error", "Your cart is empty.");
+        return false;
+      }
+      form.dataset.reviewPayload = JSON.stringify(payload);
+      const confirmationCheckbox = $("[data-cod-confirm-checkbox]", modal);
+      const submitButton = $("[data-place-order]", modal);
+      if (confirmationCheckbox) confirmationCheckbox.checked = false;
+      if (submitButton) submitButton.disabled = true;
+      setCheckoutStep(modal, "confirmation");
+      window.setTimeout(() => confirmationCheckbox?.focus(), 40);
+      return true;
+    }
+
+    const confirmationCheckbox = $("[data-cod-confirm-checkbox]", form);
+    if (!confirmationCheckbox?.checked) {
+      showCheckoutMessage(modal, "error", "Please confirm the Cash on Delivery order.");
+      return false;
+    }
+
+    const payload = getVariantCheckoutPayload(form);
+    if (form.dataset.reviewPayload !== JSON.stringify(payload)) {
+      delete form.dataset.reviewPayload;
+      setCheckoutStep(modal, "details");
+      showCheckoutMessage(modal, "error", "Your checkout details changed. Please review them again.");
+      return false;
+    }
+
+    const checkoutUserId = authUser.id;
+    const checkoutGeneration = variantCheckoutGeneration;
+    const submittedLines = variantCart.map((item) => ({ ...item }));
+    const submittedVariantIds = new Set(payload.items.map((item) => item.product_variant_id));
+    const submitButton = $("[data-place-order]", form);
+    form.dataset.submitting = "true";
+    setVariantCheckoutPending(modal, true);
+    if (submitButton) submitButton.textContent = "Placing Order...";
+
+    let attempt = null;
+    try {
+      attempt = await getVariantCheckoutAttempt(payload);
+      if (authUser?.id !== checkoutUserId || checkoutGeneration !== variantCheckoutGeneration) return false;
+
+      const rpcPayload = {
+        p_items: payload.items,
+        p_shipping_details: payload.shipping,
+        p_idempotency_key: attempt.idempotencyKey,
+      };
+      const { data, error } = await supabaseClient.rpc("place_order_v2", rpcPayload);
+      if (error) throw error;
+      if (authUser?.id !== checkoutUserId || checkoutGeneration !== variantCheckoutGeneration) return false;
+
+      const order = Array.isArray(data) ? data[0] : data;
+      if (
+        !order?.order_id
+        || !Number.isFinite(Number(order.total_amount))
+        || !Number.isInteger(Number(order.item_count))
+        || Number(order.item_count) < 1
+        || order.payment_method !== "COD"
+        || !PAYMENT_STATUSES.includes(order.payment_status)
+        || !ORDER_STATUSES.includes(order.order_status)
+      ) {
+        throw new Error("The order response was incomplete.");
+      }
+
+      variantCheckoutResult = { userId: checkoutUserId, generation: checkoutGeneration, order };
+      const reloaded = await loadAuthenticatedVariantCart(checkoutUserId, {
+        showError: false,
+        resolveAutomatic: false,
+      });
+      if (authUser?.id !== checkoutUserId || checkoutGeneration !== variantCheckoutGeneration) return false;
+      const cartConfirmedCleared = reloaded
+        && [...submittedVariantIds].every(
+          (variantId) => !variantCart.some((item) => item.productVariantId === variantId)
+        );
+      if (cartConfirmedCleared) clearVariantCheckoutAttempt(checkoutUserId, attempt.fingerprint);
+      renderVariantCheckoutSuccess(modal, order, submittedLines, cartConfirmedCleared);
+      showToast(order.idempotent_replay
+        ? "Cash on Delivery order confirmed"
+        : "Cash on Delivery order placed successfully");
+      return true;
+    } catch (error) {
+      if (authUser?.id !== checkoutUserId || checkoutGeneration !== variantCheckoutGeneration) return false;
+      console.error("Checkout place_order_v2 RPC failed", {
+        error,
+        items: payload.items,
+      });
+      const customerMessage = getVariantCheckoutErrorMessage(error);
+      if (isVariantCheckoutIdempotencyConflict(error)) {
+        if (attempt) clearVariantCheckoutAttempt(checkoutUserId, attempt.fingerprint);
+        delete form.dataset.reviewPayload;
+        setCheckoutStep(modal, "details");
+        updateCheckoutSummary(modal);
+      } else if (isVariantCheckoutRefreshError(error)) {
+        await refreshVariantCheckoutState(checkoutUserId, payload.items);
+        if (authUser?.id !== checkoutUserId || checkoutGeneration !== variantCheckoutGeneration) return false;
+        delete form.dataset.reviewPayload;
+        setCheckoutStep(modal, "details");
+        updateCheckoutSummary(modal);
+      }
+      showCheckoutMessage(modal, "error", customerMessage);
+      return false;
+    } finally {
+      if (authUser?.id === checkoutUserId && checkoutGeneration === variantCheckoutGeneration) {
+        setVariantCheckoutPending(modal, false);
+        if (submitButton) submitButton.textContent = "Confirm Cash on Delivery Order";
+      }
+    }
+  }
+
   async function handleCheckoutSubmit(event) {
     event?.preventDefault?.();
     if (VARIANT_CART_V2_ENABLED) {
+      if (VARIANT_CHECKOUT_V2_ENABLED) return handleVariantCheckoutSubmit(event);
       const blockedModal = event?.currentTarget?.closest?.(".checkout-modal") || $(".checkout-modal");
       if (blockedModal) {
         showCheckoutMessage(blockedModal, "error", "Variant checkout is not enabled yet");
@@ -5085,7 +5551,7 @@
         </div>
         <div class="cart-controls">
           <button type="button" data-product-variant-id="${escapeHTML(item.productVariantId)}" data-variant-cart-source="${escapeHTML(item.source || "authenticated-v2")}" data-variant-cart-change="-1" aria-label="Decrease ${escapeHTML(item.name)} ${escapeHTML(item.variantLabel)}">−</button>
-          <strong>${item.quantity}</strong>
+          <strong>${escapeHTML(item.quantityIsValid ? item.quantity : (item.quantityRaw || "Invalid"))}</strong>
           <button type="button" data-product-variant-id="${escapeHTML(item.productVariantId)}" data-variant-cart-source="${escapeHTML(item.source || "authenticated-v2")}" data-variant-cart-change="1" aria-label="Increase ${escapeHTML(item.name)} ${escapeHTML(item.variantLabel)}" ${unavailable || item.quantity >= MAX_CART_QUANTITY ? "disabled" : ""}>+</button>
         </div>
       </article>
@@ -5146,10 +5612,12 @@
       ${legacyVariantCart.map(renderVariantLegacyLine).join("")}
     `;
     const total = allLines.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 0), 0);
+    const checkout = getVariantCheckoutEligibility();
+    const checkoutEnabled = VARIANT_CHECKOUT_V2_ENABLED && checkout.eligible;
     footer.innerHTML = `
       <div class="cart-total"><span>Informational Total</span><span>${money(total)}</span></div>
-      <p class="variant-checkout-message" role="status">Variant checkout is not enabled yet</p>
-      <button class="cart-checkout" type="button" data-checkout disabled>Checkout</button>
+      <p class="variant-checkout-message" role="status">${escapeHTML(checkout.reason)}</p>
+      <button class="cart-checkout" type="button" data-checkout ${checkoutEnabled ? "" : "disabled"}>Checkout</button>
       <button class="clear-cart-btn" type="button" data-clear-cart>Clear Cart</button>
     `;
   }
@@ -5584,6 +6052,47 @@
     if (myOrdersLink) myOrdersLink.hidden = !authUser;
   }
 
+  function resetVariantCheckoutForAuthChange(previousUserId, nextUserId) {
+    if (!VARIANT_CHECKOUT_V2_ENABLED || previousUserId === nextUserId) return;
+    variantCheckoutGeneration += 1;
+    variantCartLoadVersion += 1;
+    variantCartAuthoritativeState = "idle";
+    variantCartAuthoritativeUserId = nextUserId || null;
+    variantCheckoutResult = null;
+
+    const storedAttempt = readStorage(STORAGE_KEYS.variantCheckoutAttempt, null);
+    if (
+      storedAttempt
+      && ((previousUserId && storedAttempt.userId === previousUserId)
+        || (nextUserId && storedAttempt.userId !== nextUserId))
+    ) {
+      removeStorage(STORAGE_KEYS.variantCheckoutAttempt);
+    }
+
+    const modal = $(".checkout-modal");
+    const form = modal && $("[data-checkout-form]", modal);
+    if (form) {
+      if (form.dataset.submitting === "true") setVariantCheckoutPending(modal, false);
+      form.reset();
+      const placeOrderButton = $("[data-place-order]", form);
+      if (placeOrderButton) placeOrderButton.disabled = true;
+      form.dataset.submitting = "false";
+      delete form.dataset.reviewPayload;
+      delete form.dataset.checkoutToken;
+      form.removeAttribute("aria-busy");
+    }
+    if (modal) {
+      modal.classList.remove("is-open");
+      modal.removeAttribute("aria-busy");
+      resetCheckoutMessage(modal);
+      resetVariantCheckoutSuccess(modal);
+      setCheckoutStep(modal, "details");
+    }
+    if (!$(".cart-drawer.is-open, .wishlist-drawer.is-open, .login-modal.is-open, .search-modal.is-open")) {
+      document.body.classList.remove("no-scroll");
+    }
+  }
+
   async function initSupabaseAuth() {
     if (!supabaseClient) {
       authUser = null;
@@ -5604,7 +6113,9 @@
         void (async () => {
           const generation = ++authStateGeneration;
           authReady = true;
-          authUser = session?.user || null;
+          const nextUser = session?.user || null;
+          resetVariantCheckoutForAuthChange(authUser?.id || null, nextUser?.id || null);
+          authUser = nextUser;
           invalidateAdminAccessForAuthChange();
           resetCustomerOrdersForAuthChange();
           await synchronizeCollectionOwner(authUser, { migrate: true });
@@ -5620,12 +6131,15 @@
       if (error) throw error;
       if (sessionRequestGeneration !== authStateGeneration) return;
       const initialGeneration = ++authStateGeneration;
-      authUser = data?.session?.user || null;
+      const initialUser = data?.session?.user || null;
+      resetVariantCheckoutForAuthChange(authUser?.id || null, initialUser?.id || null);
+      authUser = initialUser;
 
       await synchronizeCollectionOwner(authUser, { migrate: true });
       if (initialGeneration !== authStateGeneration) return;
     } catch (error) {
       console.warn("Supabase auth session check failed", error);
+      resetVariantCheckoutForAuthChange(authUser?.id || null, null);
       authUser = null;
       if (VARIANT_CART_V2_ENABLED) {
         collectionOwnerId = GUEST_STORAGE_ID;

@@ -269,11 +269,13 @@ async function exposeCheckoutTestHooks(page) {
 
 async function installSupabaseStub(page, options = {}) {
   await page.addInitScript((config) => {
-    if (config.variantUi === true || config.variantCartV2 === true) {
-      window.__ATTRACTION_FEATURES__ = {
+    if (config.variantUi === true || config.variantCartV2 === true || config.variantCheckoutV2 === true) {
+      const features = {
         variantUi: config.variantUi === true,
         variantCartV2: config.variantCartV2 === true,
       };
+      if (!config.omitVariantCheckoutFlag) features.variantCheckoutV2 = config.variantCheckoutV2 === true;
+      window.__ATTRACTION_FEATURES__ = features;
     }
     let currentUser = config.user || null;
     let remainingPlaceOrderFailures = Number(config.failPlaceOrderAttempts || 0);
@@ -281,10 +283,14 @@ async function installSupabaseStub(page, options = {}) {
     let remainingOrderLoadFailures = Number(config.failOrderLoadAttempts || 0);
     let remainingAdjustmentFailures = Number(config.failAdjustmentAttempts || 0);
     let remainingInventoryLoadFailures = Number(config.failInventoryLoadAttempts || 0);
+    let remainingPlaceOrderV2Failures = Number(config.failPlaceOrderV2Attempts || 0);
+    let remainingPlaceOrderV2UnknownResults = Number(config.unknownPlaceOrderV2Attempts || 0);
+    let remainingPlaceOrderV2Conflicts = Number(config.placeOrderV2IdempotencyConflictAttempts || 0);
     const listeners = [];
     const state = {
       rpcs: [],
       placeOrderCalls: [],
+      placeOrderV2Calls: [],
       statusUpdateCalls: [],
       paymentStatusUpdateCalls: [],
       cancellationRequestCalls: [],
@@ -328,6 +334,7 @@ async function installSupabaseStub(page, options = {}) {
     const mergeReceipts = new Set();
     const variantMergeReceipts = new Map();
     const adjustmentReceipts = new Map();
+    const placeOrderV2Receipts = new Map();
 
     const cartFor = (userId) => {
       if (!state.cloudCarts[userId]) state.cloudCarts[userId] = [];
@@ -747,6 +754,67 @@ async function installSupabaseStub(page, options = {}) {
             error: null,
           };
         }
+        if (name === "place_order_v2") {
+          state.placeOrderV2Calls.push(payload);
+          const userId = currentUser?.id;
+          if (!userId) return { data: null, error: { message: "Authentication required." } };
+          const normalizedItems = [...(payload.p_items || [])]
+            .map((item) => ({
+              product_id: item.product_id,
+              product_variant_id: item.product_variant_id,
+              quantity: item.quantity,
+            }))
+            .sort((first, second) => first.product_variant_id.localeCompare(second.product_variant_id));
+          const signature = JSON.stringify({
+            items: normalizedItems,
+            shipping: payload.p_shipping_details,
+          });
+          const receiptKey = `${userId}:${payload.p_idempotency_key}`;
+          const existingReceipt = placeOrderV2Receipts.get(receiptKey);
+          if (existingReceipt) {
+            if (existingReceipt.signature !== signature) {
+              return { data: null, error: { message: "This checkout identifier was already used for different order details." } };
+            }
+            return { data: [{ ...existingReceipt.result, idempotent_replay: true }], error: null };
+          }
+          if (config.placeOrderV2Delay) {
+            await new Promise((resolve) => setTimeout(resolve, config.placeOrderV2Delay));
+          }
+          if (remainingPlaceOrderV2Conflicts > 0) {
+            remainingPlaceOrderV2Conflicts -= 1;
+            return { data: null, error: { message: "This checkout identifier was already used for different order details." } };
+          }
+          if (remainingPlaceOrderV2Failures > 0) {
+            remainingPlaceOrderV2Failures -= 1;
+            return { data: null, error: { message: config.failPlaceOrderV2 || "Temporary checkout failure" } };
+          }
+          if (config.failPlaceOrderV2 && !config.failPlaceOrderV2Attempts) {
+            return { data: null, error: { message: config.failPlaceOrderV2 } };
+          }
+          const result = {
+            order_id: config.orderV2Id || "order-v2-test-001",
+            total_amount: config.serverV2Total ?? 219.99,
+            order_status: "Pending",
+            payment_method: "COD",
+            payment_status: "Unpaid",
+            inventory_deducted_at: "2026-07-18T10:00:00.000Z",
+            item_count: normalizedItems.length,
+            idempotent_replay: false,
+          };
+          placeOrderV2Receipts.set(receiptKey, { signature, result });
+          if (!config.keepVariantCartAfterSuccess) {
+            const submittedIds = new Set(normalizedItems.map((item) => item.product_variant_id));
+            const userCart = variantCartFor(userId);
+            for (let index = userCart.length - 1; index >= 0; index -= 1) {
+              if (submittedIds.has(userCart[index].product_variant_id)) userCart.splice(index, 1);
+            }
+          }
+          if (remainingPlaceOrderV2UnknownResults > 0) {
+            remainingPlaceOrderV2UnknownResults -= 1;
+            return { data: null, error: { message: "Network request timed out" } };
+          }
+          return { data: [result], error: null };
+        }
         if (name === "update_order_status") {
           state.statusUpdateCalls.push(payload);
           if (config.failStatusUpdate) return { data: null, error: { message: config.failStatusUpdate } };
@@ -1139,6 +1207,47 @@ async function confirmCashOnDeliveryOrder(page) {
   await checkbox.check();
   await modal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
   return modal;
+}
+
+async function openVariantCheckout(page) {
+  await page.locator(".cart-button").click();
+  const checkout = page.locator(".cart-drawer").getByRole("button", { name: "Checkout", exact: true });
+  await expect(checkout).toBeEnabled();
+  await checkout.click();
+  await expect(page.locator(".checkout-modal")).toHaveClass(/is-open/);
+}
+
+async function reviewVariantCheckout(page, values = {}) {
+  await fillCheckoutDelivery(page, values);
+  return reviewCashOnDeliveryOrder(page);
+}
+
+async function prepareVariantCheckout(page, options = {}) {
+  const user = options.user || {
+    id: "phase2b4-correction-user",
+    email: "phase2b4-correction@example.test",
+    user_metadata: { full_name: "Variant Buyer", phone: "+91 90000 11000" },
+  };
+  const variants = options.variants || createVariantRows("predator-elite-fg", ["UK 8"]);
+  const cloudItems = options.cloudItems || [{
+    product_id: "predator-elite-fg",
+    product_variant_id: variants[0].variant_id,
+    quantity: 1,
+  }];
+  await installSupabaseStub(page, {
+    user,
+    variantUi: true,
+    variantCartV2: true,
+    variantCheckoutV2: true,
+    variantRows: variants,
+    cloudVariantCarts: { [user.id]: cloudItems },
+    ...(options.stub || {}),
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await openVariantCheckout(page);
+  const modal = await reviewVariantCheckout(page, options.delivery || {});
+  await modal.locator("[data-cod-confirm-checkbox]").check();
+  return { user, variants, modal };
 }
 
 async function loginAs(page, email) {
@@ -1869,7 +1978,11 @@ test("variant mode blocks checkout and place_order while wishlist remains produc
   await page.locator(".cart-button").click();
   await expect(page.locator(".variant-checkout-message")).toHaveText("Variant checkout is not enabled yet");
   await expect(page.getByRole("button", { name: "Checkout", exact: true })).toBeDisabled();
-  expect(await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderCalls)).toEqual([]);
+  const checkoutCalls = await page.evaluate(() => ({
+    v1: window.__attractionSupabaseTestState.placeOrderCalls,
+    v2: window.__attractionSupabaseTestState.placeOrderV2Calls,
+  }));
+  expect(checkoutCalls).toEqual({ v1: [], v2: [] });
 });
 
 test("variant cart drawer is accessible and has no mobile horizontal overflow", async ({ page }) => {
@@ -2153,6 +2266,697 @@ test("rapid authenticated V2 quantity clicks serialize to the newest absolute qu
     .filter((call) => call.name === "set_cart_item_v2")
     .map((call) => call.payload.p_quantity));
   expect(calls).toEqual([2, 3]);
+});
+
+test("Phase 2B4 submits only authoritative variant IDs and shipping fields, then renders the server result", async ({ page }) => {
+  const user = {
+    id: "checkout-v2-user",
+    email: "checkout-v2@example.test",
+    user_metadata: { full_name: "Variant Buyer", phone: "+91 90000 10000" },
+  };
+  const variants = createVariantRows("predator-elite-fg", ["UK 8", "UK 9"], { "UK 9": "Low Stock" });
+  await installSupabaseStub(page, {
+    user,
+    variantUi: true,
+    variantCartV2: true,
+    variantCheckoutV2: true,
+    variantRows: variants,
+    serverV2Total: 659.97,
+    cloudVariantCarts: { [user.id]: [
+      { product_id: "predator-elite-fg", product_variant_id: variants[0].variant_id, quantity: 1 },
+      { product_id: "predator-elite-fg", product_variant_id: variants[1].variant_id, quantity: 2 },
+    ] },
+    cloudCarts: { [user.id]: [{ product_id: "phantom-control-pro", quantity: 3 }] },
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await openVariantCheckout(page);
+  const modal = await reviewVariantCheckout(page, { note: "Side entrance" });
+  await expect(modal.locator("[data-cod-confirmation-items]")).toContainText("Size: UK 8");
+  await expect(modal.locator("[data-cod-confirmation-items]")).toContainText("Size: UK 9");
+  await modal.locator("[data-cod-confirm-checkbox]").check();
+  await modal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).evaluate((button) => {
+    button.click();
+    button.click();
+  });
+
+  await expect(modal.locator("[data-checkout-success-panel]")).toBeVisible();
+  await expect(modal.locator("[data-cod-success-total]")).toHaveText("$659.97");
+  await expect(modal.locator("[data-v2-success-order-status]")).toHaveText("Pending");
+  await expect(modal.locator("[data-v2-success-item-count]")).toHaveText("2 items");
+  await expect(modal.locator("[data-v2-success-inventory]")).toHaveText("Stock deducted");
+  await expect(modal.locator("[data-v2-success-variants]")).toContainText("Predator Elite FG · UK 8");
+
+  const state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(state.placeOrderV2Calls).toHaveLength(1);
+  const payload = state.placeOrderV2Calls[0];
+  expect(Object.keys(payload).sort()).toEqual(["p_idempotency_key", "p_items", "p_shipping_details"]);
+  expect(payload.p_items).toEqual([
+    { product_id: "predator-elite-fg", product_variant_id: variants[0].variant_id, quantity: 1 },
+    { product_id: "predator-elite-fg", product_variant_id: variants[1].variant_id, quantity: 2 },
+  ].sort((first, second) => first.product_variant_id.localeCompare(second.product_variant_id)));
+  expect(payload.p_items.every((item) => Object.keys(item).sort().join(",") === "product_id,product_variant_id,quantity")).toBe(true);
+  expect(payload.p_shipping_details).toEqual({
+    customer_name: "Variant Buyer",
+    customer_phone: "+91 90000 10000",
+    address: "42 Football Street",
+    city: "Kolkata",
+    state: "West Bengal",
+    pin_code: "700001",
+    note: "Side entrance",
+  });
+  expect(state.placeOrderCalls).toEqual([]);
+  expect(state.rpcs.filter((call) => call.name === "clear_cart_v2")).toEqual([]);
+  expect(state.cloudCarts[user.id]).toEqual([{ product_id: "phantom-control-pro", quantity: 3 }]);
+  expect(state.cloudVariantCarts[user.id]).toEqual([]);
+  expect(await page.evaluate(() => localStorage.getItem("attractionCheckoutV2Attempt"))).toBeNull();
+});
+
+for (const scenario of [
+  {
+    name: "pending guest merge",
+    expected: "still synchronizing",
+    setup: async (page, user, variant) => {
+      await page.addInitScript(({ variantId }) => {
+        localStorage.setItem("attractionCartV2:guest", JSON.stringify([{
+          productId: "predator-elite-fg", productVariantId: variantId, quantity: 1,
+        }]));
+      }, { variantId: variant.variant_id });
+      return { failVariantMergeAttempts: 1 };
+    },
+  },
+  {
+    name: "local-only merge payload",
+    expected: "still synchronizing",
+    setup: async (page, user, variant) => {
+      await page.addInitScript(({ variantId }) => {
+        localStorage.setItem("attractionCartV2:guest", JSON.stringify([{
+          productId: "predator-elite-fg", productVariantId: variantId, quantity: 1,
+        }]));
+        const originalRemoveItem = Storage.prototype.removeItem;
+        let blocked = false;
+        Storage.prototype.removeItem = function removeItem(key) {
+          if (!blocked && key === "attractionCartV2:guest") {
+            blocked = true;
+            throw new Error("Simulated local-only payload");
+          }
+          return originalRemoveItem.call(this, key);
+        };
+      }, { variantId: variant.variant_id });
+      return {};
+    },
+  },
+  {
+    name: "authenticated legacy line",
+    expected: "Select an option",
+    config: (user) => ({ legacyVariantCarts: { [user.id]: [{ product_id: "phantom-control-pro", quantity: 1 }] } }),
+  },
+  {
+    name: "guest legacy line",
+    expected: "Select an option",
+    setup: async (page) => {
+      await page.addInitScript(() => {
+        localStorage.setItem("attractionCart:guest", JSON.stringify([{
+          id: "phantom-control-pro", name: "Phantom Control Pro", category: "Football Shoes", price: 199.99, image: "", qty: 1,
+        }]));
+      });
+      return {};
+    },
+  },
+  {
+    name: "out-of-stock variant",
+    expected: "out of stock",
+    item: { stock_state: "Out of Stock", purchasable_quantity: 0 },
+  },
+  {
+    name: "inactive product",
+    expected: "products are unavailable",
+    item: { product_is_active: false },
+  },
+  {
+    name: "inactive variant",
+    expected: "selected options are unavailable",
+    item: { variant_is_active: false, stock_state: "Unavailable", purchasable_quantity: 0 },
+  },
+  {
+    name: "exponent quantity",
+    expected: "invalid quantity",
+    item: { quantity: "1e2" },
+  },
+]) {
+  test(`Phase 2B4 blocks ${scenario.name} before checkout`, async ({ page }) => {
+    const user = {
+      id: `blocked-${scenario.name.replace(/\W+/g, "-")}`,
+      email: "blocked@example.test",
+      user_metadata: { full_name: "Blocked Buyer", phone: "+91 90000 10001" },
+    };
+    const [variant] = createVariantRows("predator-elite-fg", ["UK 8"]);
+    const setupConfig = scenario.setup ? await scenario.setup(page, user, variant) : {};
+    const extraConfig = scenario.config ? scenario.config(user) : {};
+    await installSupabaseStub(page, {
+      user,
+      variantUi: true,
+      variantCartV2: true,
+      variantCheckoutV2: true,
+      variantRows: [variant],
+      cloudVariantCarts: { [user.id]: [{
+        product_id: "predator-elite-fg",
+        product_variant_id: variant.variant_id,
+        quantity: 1,
+        ...scenario.item,
+      }] },
+      ...setupConfig,
+      ...extraConfig,
+    });
+    await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+    await page.locator(".cart-button").click();
+    const drawer = page.locator(".cart-drawer");
+    await expect(drawer.locator(".variant-checkout-message")).toContainText(new RegExp(scenario.expected, "i"));
+    await expect(drawer.getByRole("button", { name: "Checkout", exact: true })).toBeDisabled();
+    expect(await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderV2Calls)).toEqual([]);
+  });
+}
+
+test("Phase 2B4 reuses one idempotency UUID after failure and unknown-result retry", async ({ page }) => {
+  const user = {
+    id: "retry-v2-user",
+    email: "retry-v2@example.test",
+    user_metadata: { full_name: "Retry Buyer", phone: "+91 90000 10002" },
+  };
+  const [variant] = createVariantRows("predator-elite-fg", ["UK 8"]);
+  await installSupabaseStub(page, {
+    user,
+    variantUi: true,
+    variantCartV2: true,
+    variantCheckoutV2: true,
+    variantRows: [variant],
+    cloudVariantCarts: { [user.id]: [{ product_id: "predator-elite-fg", product_variant_id: variant.variant_id, quantity: 1 }] },
+    failPlaceOrderV2Attempts: 1,
+    failPlaceOrderV2: "Temporary network failure",
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await openVariantCheckout(page);
+  const modal = await reviewVariantCheckout(page);
+  await modal.locator("[data-cod-confirm-checkbox]").check();
+  await modal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+  await expect(modal.locator("[data-checkout-error]")).toHaveText("We could not place your order. Please try again.");
+  const savedAttempt = await page.evaluate(() => JSON.parse(localStorage.getItem("attractionCheckoutV2Attempt")));
+  expect(Object.keys(savedAttempt).sort()).toEqual(["fingerprint", "idempotencyKey", "userId"]);
+  expect(savedAttempt.userId).toBe(user.id);
+
+  await modal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+  await expect(modal.locator("[data-checkout-success-panel]")).toBeVisible();
+  const calls = await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderV2Calls);
+  expect(calls).toHaveLength(2);
+  expect(calls[1].p_idempotency_key).toBe(calls[0].p_idempotency_key);
+});
+
+test("Phase 2B4 recovers an unknown committed response with the same UUID and idempotent replay", async ({ page }) => {
+  const user = {
+    id: "unknown-v2-user",
+    email: "unknown-v2@example.test",
+    user_metadata: { full_name: "Unknown Buyer", phone: "+91 90000 10003" },
+  };
+  const [variant] = createVariantRows("predator-elite-fg", ["UK 8"]);
+  await installSupabaseStub(page, {
+    user,
+    variantUi: true,
+    variantCartV2: true,
+    variantCheckoutV2: true,
+    variantRows: [variant],
+    cloudVariantCarts: { [user.id]: [{ product_id: "predator-elite-fg", product_variant_id: variant.variant_id, quantity: 1 }] },
+    unknownPlaceOrderV2Attempts: 1,
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await openVariantCheckout(page);
+  const modal = await reviewVariantCheckout(page);
+  await modal.locator("[data-cod-confirm-checkbox]").check();
+  await modal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+  await expect(modal.locator("[data-checkout-error]")).toContainText("try again");
+  await modal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+  await expect(modal.locator("[data-checkout-success-panel]")).toBeVisible();
+  const result = await page.evaluate(() => ({
+    calls: window.__attractionSupabaseTestState.placeOrderV2Calls,
+    attempt: localStorage.getItem("attractionCheckoutV2Attempt"),
+    toast: document.querySelector(".toast")?.textContent,
+  }));
+  expect(result.calls).toHaveLength(2);
+  expect(result.calls[1].p_idempotency_key).toBe(result.calls[0].p_idempotency_key);
+  expect(result.attempt).toBeNull();
+  expect(result.toast).toContain("order confirmed");
+});
+
+test("Phase 2B4 creates a new UUID when shipping or authoritative cart content changes", async ({ page }) => {
+  const user = {
+    id: "changed-v2-user",
+    email: "changed-v2@example.test",
+    user_metadata: { full_name: "Changed Buyer", phone: "+91 90000 10004" },
+  };
+  const variants = createVariantRows("predator-elite-fg", ["UK 8", "UK 9"]);
+  await installSupabaseStub(page, {
+    user,
+    variantUi: true,
+    variantCartV2: true,
+    variantCheckoutV2: true,
+    variantRows: variants,
+    cloudVariantCarts: { [user.id]: [{ product_id: "predator-elite-fg", product_variant_id: variants[0].variant_id, quantity: 1 }] },
+    failPlaceOrderV2Attempts: 3,
+    failPlaceOrderV2: "Temporary network failure",
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+
+  const attemptCheckout = async (city = "Kolkata") => {
+    await openVariantCheckout(page);
+    const modal = await reviewVariantCheckout(page, { city });
+    await modal.locator("[data-cod-confirm-checkbox]").check();
+    await modal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+    await expect(modal.locator("[data-checkout-error]")).toContainText("try again");
+    await modal.getByRole("button", { name: "Close checkout" }).click();
+  };
+
+  await attemptCheckout();
+  await attemptCheckout("Howrah");
+  await page.locator(".cart-button").click();
+  await page.locator(`[data-variant-cart-line="${variants[0].variant_id}"]`).getByRole("button", { name: /Decrease/ }).click();
+  await page.locator("[data-close-cart]").click();
+  const card = page.locator('.product-card[data-product-id="predator-elite-fg"]').first();
+  await card.getByRole("button", { name: "UK 9", exact: true }).click();
+  await card.getByRole("button", { name: "Add to Cart", exact: true }).click();
+  await card.getByRole("button", { name: "Add to Cart", exact: true }).click();
+  await attemptCheckout("Howrah");
+
+  const calls = await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderV2Calls);
+  expect(new Set(calls.map((call) => call.p_idempotency_key)).size).toBe(3);
+  expect(calls[2].p_items).toEqual([{
+    product_id: "predator-elite-fg", product_variant_id: variants[1].variant_id, quantity: 2,
+  }]);
+});
+
+test("Phase 2B4 cart-change and stock errors refresh authoritative cart without automatic retry", async ({ page }) => {
+  const user = {
+    id: "refresh-v2-user",
+    email: "refresh-v2@example.test",
+    user_metadata: { full_name: "Refresh Buyer", phone: "+91 90000 10005" },
+  };
+  const [variant] = createVariantRows("predator-elite-fg", ["UK 8"]);
+  await installSupabaseStub(page, {
+    user,
+    variantUi: true,
+    variantCartV2: true,
+    variantCheckoutV2: true,
+    variantRows: [variant],
+    cloudVariantCarts: { [user.id]: [{ product_id: "predator-elite-fg", product_variant_id: variant.variant_id, quantity: 1 }] },
+    failPlaceOrderV2: "Cart changed. Please review the latest cart.",
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await openVariantCheckout(page);
+  const modal = await reviewVariantCheckout(page);
+  await modal.locator("[data-cod-confirm-checkbox]").check();
+  await modal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+  await expect(modal.locator("[data-checkout-details]")).toBeVisible();
+  await expect(modal.locator("[data-checkout-error]")).toContainText(/cart changed/i);
+  const state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(state.placeOrderV2Calls).toHaveLength(1);
+  expect(state.rpcs.filter((call) => call.name === "get_cart_v2").length).toBeGreaterThanOrEqual(2);
+  expect(state.rpcs.filter((call) => call.name === "get_storefront_variants").length).toBeGreaterThanOrEqual(2);
+});
+
+test("Phase 2B4 exposes pending accessibility state and ignores stale User A checkout response", async ({ page }) => {
+  const userA = {
+    id: "checkout-user-a",
+    email: "checkout-user-a@example.test",
+    user_metadata: { full_name: "User A", phone: "+91 90000 10006" },
+  };
+  const userB = {
+    id: "checkout-user-b",
+    email: "checkout-user-b@example.test",
+    user_metadata: { full_name: "User B", phone: "+91 90000 10007" },
+  };
+  const [variant] = createVariantRows("predator-elite-fg", ["UK 8"]);
+  await installSupabaseStub(page, {
+    user: userA,
+    usersByEmail: { [userB.email]: userB },
+    variantUi: true,
+    variantCartV2: true,
+    variantCheckoutV2: true,
+    variantRows: [variant],
+    placeOrderV2Delay: 350,
+    cloudVariantCarts: {
+      [userA.id]: [{ product_id: "predator-elite-fg", product_variant_id: variant.variant_id, quantity: 1 }],
+      [userB.id]: [{ product_id: "predator-elite-fg", product_variant_id: variant.variant_id, quantity: 2 }],
+    },
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await openVariantCheckout(page);
+  const modal = await reviewVariantCheckout(page);
+  await modal.locator("[data-cod-confirm-checkbox]").check();
+  await modal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+  await expect(modal).toHaveAttribute("aria-busy", "true");
+  await expect(modal.locator("[data-checkout-form]")).toHaveAttribute("aria-busy", "true");
+  await expect(modal.locator("#checkout-address")).toBeDisabled();
+
+  await page.evaluate(async (email) => {
+    await window.__attractionSupabaseClient.auth.signOut();
+    await window.__attractionSupabaseClient.auth.signInWithPassword({ email, password: "valid-password" });
+  }, userB.email);
+  await expect(modal).not.toHaveClass(/is-open/);
+  await page.waitForTimeout(450);
+  await expect(modal.locator("[data-checkout-success-panel]")).toBeHidden();
+  expect(await page.evaluate(() => localStorage.getItem("attractionCheckoutV2Attempt"))).toBeNull();
+  await expect(page.locator(".cart-count")).toHaveText("2");
+});
+
+test("Phase 2B4 checkout modal is mobile-safe and uses only V2 order RPCs", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const user = {
+    id: "mobile-v2-user",
+    email: "mobile-v2@example.test",
+    user_metadata: { full_name: "Mobile Buyer", phone: "+91 90000 10008" },
+  };
+  const [variant] = createVariantRows("predator-elite-fg", ["UK 8"]);
+  await installSupabaseStub(page, {
+    user,
+    variantUi: true,
+    variantCartV2: true,
+    variantCheckoutV2: true,
+    variantRows: [variant],
+    cloudVariantCarts: { [user.id]: [{ product_id: "predator-elite-fg", product_variant_id: variant.variant_id, quantity: 1 }] },
+  });
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  await openVariantCheckout(page);
+  await reviewVariantCheckout(page);
+  await expect(page.locator("[data-cod-confirmation-items]")).toContainText("Size: UK 8");
+  await expectNoHorizontalOverflow(page);
+  const calls = await page.evaluate(() => window.__attractionSupabaseTestState.rpcs.map((call) => call.name));
+  expect(calls).not.toContain("place_order");
+});
+
+for (const flagCase of [
+  { name: "absent", omitVariantCheckoutFlag: true, expectedProperty: false },
+  { name: "explicitly false", omitVariantCheckoutFlag: false, expectedProperty: true },
+]) {
+  test(`Phase 2B4 keeps checkout disabled when the third flag is ${flagCase.name}`, async ({ page }) => {
+    const variants = createVariantRows("predator-elite-fg", ["UK 8"]);
+    await installSupabaseStub(page, {
+      user: null,
+      variantUi: true,
+      variantCartV2: true,
+      variantCheckoutV2: false,
+      omitVariantCheckoutFlag: flagCase.omitVariantCheckoutFlag,
+      variantRows: variants,
+    });
+    await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+    const card = page.locator('.product-card[data-product-id="predator-elite-fg"]').first();
+    await card.getByRole("button", { name: "UK 8", exact: true }).click();
+    await card.getByRole("button", { name: "Add to Cart", exact: true }).click();
+    await page.locator(".cart-button").click();
+
+    await expect(page.locator(".variant-checkout-message")).toHaveText("Variant checkout is not enabled yet");
+    await expect(page.getByRole("button", { name: "Checkout", exact: true })).toBeDisabled();
+    const state = await page.evaluate(() => ({
+      hasThirdFlag: Object.prototype.hasOwnProperty.call(window.__ATTRACTION_FEATURES__, "variantCheckoutV2"),
+      thirdFlag: window.__ATTRACTION_FEATURES__.variantCheckoutV2,
+      v1: window.__attractionSupabaseTestState.placeOrderCalls,
+      v2: window.__attractionSupabaseTestState.placeOrderV2Calls,
+    }));
+    expect(state.hasThirdFlag).toBe(flagCase.expectedProperty);
+    expect(state.thirdFlag).not.toBe(true);
+    expect(state.v1).toEqual([]);
+    expect(state.v2).toEqual([]);
+  });
+}
+
+for (const malformedQuantity of [
+  { name: "blank", value: "" },
+  { name: "surrounding spaces", value: " 1 " },
+  { name: "trailing space", value: "1 " },
+  { name: "leading space", value: " 1" },
+  { name: "tab", value: "1\t" },
+  { name: "newline", value: "1\n" },
+  { name: "negative", value: "-1" },
+  { name: "explicit plus", value: "+1" },
+  { name: "decimal", value: "1.5" },
+  { name: "lowercase exponent", value: "1e2" },
+  { name: "uppercase exponent", value: "1E2" },
+  { name: "hexadecimal", value: "0x10" },
+  { name: "zero", value: "0" },
+  { name: "above maximum", value: "21" },
+]) {
+  test(`Phase 2B4 rejects ${malformedQuantity.name} cloud quantity`, async ({ page }) => {
+    const user = {
+      id: `invalid-quantity-${malformedQuantity.name.replace(/\W+/g, "-")}`,
+      email: "invalid-quantity@example.test",
+      user_metadata: {},
+    };
+    const [variant] = createVariantRows("predator-elite-fg", ["UK 8"]);
+    await installSupabaseStub(page, {
+      user,
+      variantUi: true,
+      variantCartV2: true,
+      variantCheckoutV2: true,
+      variantRows: [variant],
+      cloudVariantCarts: { [user.id]: [{
+        product_id: "predator-elite-fg",
+        product_variant_id: variant.variant_id,
+        quantity: malformedQuantity.value,
+      }] },
+    });
+    await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+    await page.locator(".cart-button").click();
+    await expect(page.locator(".variant-checkout-message")).toHaveText("Your cart contains an invalid quantity.");
+    await expect(page.getByRole("button", { name: "Checkout", exact: true })).toBeDisabled();
+    expect(await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderV2Calls)).toEqual([]);
+  });
+}
+
+for (const validQuantity of ["1", "10", "20"]) {
+  test(`Phase 2B4 submits valid string quantity ${validQuantity} as an integer`, async ({ page }) => {
+    const user = {
+      id: `valid-quantity-${validQuantity}`,
+      email: "valid-quantity@example.test",
+      user_metadata: { full_name: "Valid Quantity", phone: "+91 90000 11001" },
+    };
+    const [variant] = createVariantRows("predator-elite-fg", ["UK 8"]);
+    const { modal } = await prepareVariantCheckout(page, {
+      user,
+      variants: [variant],
+      cloudItems: [{
+        product_id: "predator-elite-fg",
+        product_variant_id: variant.variant_id,
+        quantity: validQuantity,
+        purchasable_quantity: 20,
+      }],
+    });
+    await modal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+    await expect(modal.locator("[data-checkout-success-panel]")).toBeVisible();
+    const item = await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderV2Calls[0].p_items[0]);
+    expect(item.quantity).toBe(Number(validQuantity));
+    expect(typeof item.quantity).toBe("number");
+  });
+}
+
+test("Phase 2B4 guards two direct enabled-handler invocations synchronously", async ({ page }) => {
+  await exposeCheckoutTestHooks(page);
+  const { modal } = await prepareVariantCheckout(page, {
+    stub: { placeOrderV2Delay: 250 },
+  });
+
+  const pending = await page.evaluate(() => {
+    const form = document.querySelector("[data-checkout-form]");
+    const invoke = () => window.__phase2A3CheckoutTestHooks.handleCheckoutSubmit({
+      currentTarget: form,
+      preventDefault() {},
+    });
+    const first = invoke();
+    const second = invoke();
+    window.__phase2B4DirectResults = Promise.all([first, second]);
+    return {
+      submitting: form.dataset.submitting,
+      busy: form.getAttribute("aria-busy"),
+      addressDisabled: document.querySelector("#checkout-address").disabled,
+    };
+  });
+  expect(pending).toEqual({ submitting: "true", busy: "true", addressDisabled: true });
+  await expect(modal).toHaveAttribute("aria-busy", "true");
+  expect(await page.evaluate(() => window.__phase2B4DirectResults)).toEqual([true, false]);
+  await expect(modal.locator("[data-checkout-success-panel]")).toBeVisible();
+  expect(await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderV2Calls)).toHaveLength(1);
+});
+
+test("Phase 2B4 serializes a keyboard submission and button activation race", async ({ page }) => {
+  const { modal } = await prepareVariantCheckout(page, {
+    stub: { placeOrderV2Delay: 250 },
+  });
+  await modal.locator("[data-checkout-form]").evaluate((form) => {
+    form.requestSubmit();
+    form.querySelector("[data-place-order]").click();
+  });
+  await expect(modal).toHaveAttribute("aria-busy", "true");
+  await expect(modal.locator("[data-place-order]")).toBeDisabled();
+  await expect(modal.locator("[data-checkout-success-panel]")).toBeVisible();
+  const state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(state.placeOrderV2Calls).toHaveLength(1);
+  expect(new Set(state.placeOrderV2Calls.map((call) => call.p_idempotency_key)).size).toBe(1);
+  expect(state.placeOrderCalls).toEqual([]);
+});
+
+test("Phase 2B4 changes the UUID when only quantity changes", async ({ page }) => {
+  const { variants, modal } = await prepareVariantCheckout(page, {
+    stub: { failPlaceOrderV2Attempts: 1, failPlaceOrderV2: "Network connection interrupted" },
+  });
+  await modal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+  await expect(modal.locator("[data-checkout-error]")).toContainText("try again");
+  const firstCall = await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderV2Calls[0]);
+  await modal.getByRole("button", { name: "Close checkout" }).click();
+  await page.locator(".cart-button").click();
+  await page.locator(`[data-variant-cart-line="${variants[0].variant_id}"]`).getByRole("button", { name: /Increase/ }).click();
+  await page.locator("[data-close-cart]").click();
+
+  await openVariantCheckout(page);
+  const retryModal = await reviewVariantCheckout(page);
+  await retryModal.locator("[data-cod-confirm-checkbox]").check();
+  await retryModal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+  await expect(retryModal.locator("[data-checkout-success-panel]")).toBeVisible();
+  const calls = await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderV2Calls);
+  expect(calls[1].p_idempotency_key).not.toBe(firstCall.p_idempotency_key);
+  expect(calls[1].p_items).toEqual([{
+    product_id: "predator-elite-fg",
+    product_variant_id: variants[0].variant_id,
+    quantity: 2,
+  }]);
+});
+
+test("Phase 2B4 changes the UUID when only the selected variant changes", async ({ page }) => {
+  const variants = createVariantRows("predator-elite-fg", ["UK 8", "UK 9"]);
+  const { modal } = await prepareVariantCheckout(page, {
+    variants,
+    stub: { failPlaceOrderV2Attempts: 1, failPlaceOrderV2: "Network connection interrupted" },
+  });
+  await modal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+  await expect(modal.locator("[data-checkout-error]")).toContainText("try again");
+  const firstCall = await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderV2Calls[0]);
+  await modal.getByRole("button", { name: "Close checkout" }).click();
+  await page.locator(".cart-button").click();
+  await page.locator(`[data-variant-cart-line="${variants[0].variant_id}"]`).getByRole("button", { name: /Decrease/ }).click();
+  await page.locator("[data-close-cart]").click();
+  const card = page.locator('.product-card[data-product-id="predator-elite-fg"]').first();
+  await card.getByRole("button", { name: "UK 9", exact: true }).click();
+  await card.getByRole("button", { name: "Add to Cart", exact: true }).click();
+
+  await openVariantCheckout(page);
+  const retryModal = await reviewVariantCheckout(page);
+  await retryModal.locator("[data-cod-confirm-checkbox]").check();
+  await retryModal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+  await expect(retryModal.locator("[data-checkout-success-panel]")).toBeVisible();
+  const calls = await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderV2Calls);
+  expect(calls[1].p_idempotency_key).not.toBe(firstCall.p_idempotency_key);
+  expect(calls[1].p_items).toEqual([{
+    product_id: "predator-elite-fg",
+    product_variant_id: variants[1].variant_id,
+    quantity: 1,
+  }]);
+});
+
+test("Phase 2B4 refreshes cart and availability after insufficient stock", async ({ page }) => {
+  const { variants, modal } = await prepareVariantCheckout(page, {
+    cloudItems: [{
+      product_id: "predator-elite-fg",
+      product_variant_id: createVariantRows("predator-elite-fg", ["UK 8"])[0].variant_id,
+      quantity: 2,
+    }],
+    stub: { failPlaceOrderV2Attempts: 1, failPlaceOrderV2: "Insufficient stock for selected variant." },
+  });
+  await modal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+  await expect(modal.locator("[data-checkout-error]")).toHaveText("One or more selected options do not have enough stock.");
+  await expect(modal.locator("[data-checkout-details]")).toBeVisible();
+  await page.waitForTimeout(100);
+  const state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(state.placeOrderV2Calls).toHaveLength(1);
+  expect(state.placeOrderCalls).toEqual([]);
+  expect(state.rpcs.filter((call) => call.name === "get_cart_v2").length).toBeGreaterThanOrEqual(2);
+  expect(state.rpcs.filter((call) => call.name === "get_storefront_variants").length).toBeGreaterThanOrEqual(2);
+  const line = page.locator(`[data-variant-cart-line="${variants[0].variant_id}"]`);
+  await expect(line.locator(".cart-controls strong")).toHaveText("2");
+  await expect(line.getByRole("button", { name: /Decrease/ })).toBeEnabled();
+  expect(await page.evaluate(() => localStorage.getItem("attractionCheckoutV2Attempt"))).not.toBeNull();
+});
+
+test("Phase 2B4 clears User A checkout state immediately on logout before User B login", async ({ page }) => {
+  const userA = {
+    id: "logout-checkout-user-a",
+    email: "logout-checkout-a@example.test",
+    user_metadata: { full_name: "Logout User A", phone: "+91 90000 11002" },
+  };
+  const userB = {
+    id: "logout-checkout-user-b",
+    email: "logout-checkout-b@example.test",
+    user_metadata: { full_name: "Logout User B", phone: "+91 90000 11003" },
+  };
+  const [variant] = createVariantRows("predator-elite-fg", ["UK 8"]);
+  const { modal } = await prepareVariantCheckout(page, {
+    user: userA,
+    variants: [variant],
+    stub: {
+      usersByEmail: { [userB.email]: userB },
+      placeOrderV2Delay: 350,
+      cloudVariantCarts: {
+        [userA.id]: [{ product_id: "predator-elite-fg", product_variant_id: variant.variant_id, quantity: 1 }],
+        [userB.id]: [{ product_id: "predator-elite-fg", product_variant_id: variant.variant_id, quantity: 2 }],
+      },
+    },
+  });
+  await modal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("attractionCheckoutV2Attempt"))).not.toBeNull();
+  await expect(modal).toHaveAttribute("aria-busy", "true");
+
+  await page.evaluate(() => window.__attractionSupabaseClient.auth.signOut());
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("attractionCheckoutV2Attempt"))).toBeNull();
+  await expect(modal).not.toHaveClass(/is-open/);
+  await expect(modal).not.toHaveAttribute("aria-busy", "true");
+  await expect(modal.locator("[data-checkout-form]")).toHaveAttribute("data-submitting", "false");
+  await expect(modal.locator("[data-place-order]")).toBeDisabled();
+  await expect(modal.locator("[data-checkout-success-panel]")).toBeHidden();
+  await page.waitForTimeout(450);
+  await expect(modal.locator("[data-checkout-success-panel]")).toBeHidden();
+
+  await page.evaluate((email) => window.__attractionSupabaseClient.auth.signInWithPassword({
+    email,
+    password: "valid-password",
+  }), userB.email);
+  await expect(page.locator(".cart-count")).toHaveText("2");
+  expect(await page.evaluate(() => localStorage.getItem("attractionCheckoutV2Attempt"))).toBeNull();
+  await expect(modal.locator("[data-checkout-success-panel]")).toBeHidden();
+});
+
+test("Phase 2B4 retires a definitive idempotency conflict before deliberate retry", async ({ page }) => {
+  const { modal } = await prepareVariantCheckout(page, {
+    stub: { placeOrderV2IdempotencyConflictAttempts: 1 },
+  });
+  await modal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+  await expect(modal.locator("[data-checkout-error]")).toHaveText(
+    "This checkout attempt could not be reused. Please review your cart and try again."
+  );
+  await expect(modal.locator("[data-checkout-details]")).toBeVisible();
+  const firstState = await page.evaluate(() => ({
+    calls: window.__attractionSupabaseTestState.placeOrderV2Calls,
+    v1: window.__attractionSupabaseTestState.placeOrderCalls,
+    attempt: localStorage.getItem("attractionCheckoutV2Attempt"),
+    cart: window.__attractionSupabaseTestState.cloudVariantCarts["phase2b4-correction-user"],
+  }));
+  expect(firstState.calls).toHaveLength(1);
+  expect(firstState.v1).toEqual([]);
+  expect(firstState.attempt).toBeNull();
+  expect(firstState.cart).toHaveLength(1);
+  await page.waitForTimeout(100);
+  expect(await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderV2Calls)).toHaveLength(1);
+
+  const retryModal = await reviewVariantCheckout(page);
+  await retryModal.locator("[data-cod-confirm-checkbox]").check();
+  await retryModal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+  await expect(retryModal.locator("[data-checkout-success-panel]")).toBeVisible();
+  const calls = await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderV2Calls);
+  expect(calls).toHaveLength(2);
+  expect(calls[1].p_idempotency_key).not.toBe(calls[0].p_idempotency_key);
+  expect(await page.evaluate(() => window.__attractionSupabaseTestState.placeOrderCalls)).toEqual([]);
 });
 
 test("cookie banner appears on first visit and saves consent preferences", async ({ page }) => {
@@ -3460,7 +4264,7 @@ test("cart stays empty until the authenticated session owner is resolved", async
   await expect(page.locator(".cart-count")).toHaveText("1", { timeout: 1500 });
 });
 
-test("same authenticated user sees cloud cart and wishlist changes across browser contexts", async ({ browser }) => {
+test("same authenticated user sees cloud cart and wishlist changes across browser contexts", async ({ browser, baseURL }) => {
   const cloud = createSharedCloudState();
   const user = {
     id: "cross-device-user",
@@ -3468,7 +4272,7 @@ test("same authenticated user sees cloud cart and wishlist changes across browse
     user_metadata: { full_name: "Cross Device User", phone: "+91 90000 00006" },
   };
   const contextOptions = {
-    baseURL: "http://127.0.0.1:4173",
+    baseURL,
     viewport: { width: 390, height: 844 },
     isMobile: true,
     hasTouch: true,
@@ -3951,11 +4755,16 @@ test("admin dashboard renders orders and updates order status", async ({ page })
         payment_method: "COD",
         payment_status: "Unpaid",
         payment_collected_at: null,
+        inventory_deducted_at: "2026-07-11T10:31:00.000Z",
+        inventory_restored_at: null,
         order_items: [
           {
             product_image: "assets/hero-football-boot.avif",
             product_name: "Predator Elite FG",
             product_category: "Football Shoes",
+            product_variant_id: "00000000-0000-4000-8000-000000000888",
+            variant_label: "UK 8",
+            variant_sku: "ATF-PREDATOR-ELITE-FG-UK8",
             product_price: 4299,
             quantity: 1,
           },
@@ -3968,6 +4777,10 @@ test("admin dashboard renders orders and updates order status", async ({ page })
   await expect(page.getByRole("heading", { name: "Customer Orders" })).toBeVisible();
   await expect(page.getByText("Ravi Customer")).toBeVisible();
   await expect(page.getByText("Predator Elite FG")).toBeVisible();
+  await expect(page.getByText("Size: UK 8")).toBeVisible();
+  await expect(page.getByText("SKU: ATF-PREDATOR-ELITE-FG-UK8")).toBeVisible();
+  await expect(page.getByText("Inventory Deducted:")).toBeVisible();
+  await expect(page.getByText("Inventory Restored:")).toHaveCount(0);
   await expect(page.getByText(/4299\.00/).first()).toBeVisible();
   await expect(page.getByText("Payment Method:")).toBeVisible();
   await expect(page.locator("[data-admin-current-payment-status]")).toHaveText("Unpaid");
@@ -4919,7 +5732,7 @@ test("my order details use historical item snapshots and close with Escape", asy
       state: "West Bengal",
       pin_code: "700001",
       note: "Call before delivery",
-      total_amount: 79.98,
+      total_amount: 89.98,
       status: "Shipped",
       payment_method: "COD",
       payment_status: "Paid",
@@ -4928,11 +5741,23 @@ test("my order details use historical item snapshots and close with Escape", asy
         id: "snapshot-item-1",
         order_id: "94227091-6585-4682-8d1b-0c7e000d7735",
         product_id: "historical-product",
+        product_variant_id: "00000000-0000-4000-8000-000000000888",
+        variant_label: "M",
+        variant_sku: "ATF-HISTORICAL-MATCH-TEE-M",
         product_name: "Historical Match Tee",
         product_category: "T-Shirts",
         product_price: 39.99,
         quantity: 2,
         product_image: "assets/premium-football-tshirt.avif",
+      }, {
+        id: "snapshot-item-legacy",
+        order_id: "94227091-6585-4682-8d1b-0c7e000d7735",
+        product_id: "legacy-product",
+        product_name: "Legacy Wristband",
+        product_category: "Accessories",
+        product_price: 10,
+        quantity: 1,
+        product_image: "assets/accessory-flex-wristbands-real.avif",
       }],
     }],
   });
@@ -4943,9 +5768,14 @@ test("my order details use historical item snapshots and close with Escape", asy
   await expect(modal).toHaveClass(/is-open/);
   await expect(modal).toContainText("94227091-6585-4682-8d1b-0c7e000d7735");
   await expect(modal).toContainText("Historical Match Tee");
+  await expect(modal).toContainText("Size: M");
+  await expect(modal).toContainText("SKU: ATF-HISTORICAL-MATCH-TEE-M");
+  const legacyItem = modal.locator(".customer-order-item", { hasText: "Legacy Wristband" });
+  await expect(legacyItem).not.toContainText("Size:");
+  await expect(legacyItem).not.toContainText("SKU:");
   await expect(modal).toContainText("$39.99 × 2");
-  await expect(modal.locator(".customer-order-item b")).toHaveText("$79.98");
-  await expect(modal.locator(".order-details-total strong")).toHaveText("$79.98");
+  await expect(modal.locator(".customer-order-item b")).toHaveText(["$79.98", "$10.00"]);
+  await expect(modal.locator(".order-details-total strong")).toHaveText("$89.98");
   await expect(modal).toContainText("Call before delivery");
   await expect(modal.locator(".order-status")).toHaveText("Shipped");
   await expect(modal).toContainText("Payment Method: Cash on Delivery");
