@@ -78,18 +78,159 @@
       </div>
 
       <div class="admin-dashboard" data-admin-dashboard hidden>
-        <div class="admin-dashboard-head">
-          <div>
-            <p class="eyebrow lime">Orders</p>
-            <h2>Customer Orders</h2>
-          </div>
-          <div class="admin-stat">
-            <span data-admin-order-count>0</span>
-            <small>Total orders</small>
-          </div>
+        <div class="admin-tabs" role="tablist" aria-label="Admin dashboard sections">
+          <button class="admin-tab is-active" type="button" role="tab" id="admin-orders-tab" aria-selected="true" aria-controls="admin-orders-panel" data-admin-tab="orders">Orders</button>
+          <button class="admin-tab" type="button" role="tab" id="admin-inventory-tab" aria-selected="false" aria-controls="admin-inventory-panel" data-admin-tab="inventory">Inventory</button>
         </div>
-        <p class="admin-feedback" data-admin-feedback hidden></p>
-        <div class="admin-order-list" data-admin-orders></div>
+
+        <section id="admin-orders-panel" class="admin-panel" role="tabpanel" aria-labelledby="admin-orders-tab" data-admin-panel="orders">
+          <div class="admin-dashboard-head">
+            <div>
+              <p class="eyebrow lime">Orders</p>
+              <h2>Customer Orders</h2>
+            </div>
+            <div class="admin-stat">
+              <span data-admin-order-count>0</span>
+              <small>Total orders</small>
+            </div>
+          </div>
+          <p class="admin-feedback" data-admin-feedback role="status" aria-live="polite" hidden></p>
+          <div class="admin-order-list" data-admin-orders></div>
+        </section>
+
+        <section id="admin-inventory-panel" class="admin-panel admin-inventory" role="tabpanel" aria-labelledby="admin-inventory-tab" data-admin-panel="inventory" hidden>
+          <div class="admin-dashboard-head admin-inventory-head">
+            <div>
+              <p class="eyebrow lime">Inventory</p>
+              <h2>Inventory Management</h2>
+              <p>Review variant stock, reconcile physical quantities, and inspect the inventory audit ledger.</p>
+            </div>
+            <button class="btn ghost admin-inventory-refresh" type="button" data-inventory-refresh aria-label="Refresh inventory data">Refresh</button>
+          </div>
+
+          <div class="admin-inventory-state" data-inventory-loading>
+            <span class="admin-inventory-spinner" aria-hidden="true"></span>
+            <p>Loading secure inventory data...</p>
+          </div>
+
+          <div class="admin-inventory-state admin-inventory-state--error" data-inventory-error hidden>
+            <p>Inventory could not be loaded. Please try again.</p>
+            <button class="btn ghost" type="button" data-inventory-retry>Retry</button>
+          </div>
+
+          <div data-inventory-content hidden>
+            <p class="admin-inventory-feedback" data-inventory-feedback role="status" aria-live="polite" hidden></p>
+
+            <div class="admin-inventory-metrics" aria-label="Inventory summary">
+              <article><span data-inventory-metric="products">0</span><small>Total Products</small></article>
+              <article><span data-inventory-metric="variants">0</span><small>Total Variants</small></article>
+              <article><span data-inventory-metric="stock">0</span><small>Total Stock Units</small></article>
+              <article><span data-inventory-metric="low">0</span><small>Low Stock Variants</small></article>
+              <article><span data-inventory-metric="out">0</span><small>Out of Stock Variants</small></article>
+              <article><span data-inventory-metric="inactive">0</span><small>Inactive Variants</small></article>
+            </div>
+
+            <div class="admin-inventory-filters" aria-label="Inventory filters">
+              <label class="admin-inventory-search" for="inventory-search">
+                <span>Search Inventory</span>
+                <input id="inventory-search" type="search" placeholder="Product, ID, SKU, or variant" autocomplete="off" data-inventory-search />
+              </label>
+              <label for="inventory-category-filter">
+                <span>Category</span>
+                <select id="inventory-category-filter" data-inventory-category>
+                  <option value="all">All Categories</option>
+                </select>
+              </label>
+              <label for="inventory-stock-filter">
+                <span>Stock Status</span>
+                <select id="inventory-stock-filter" data-inventory-stock-filter>
+                  <option value="all">All Stock States</option>
+                  <option value="In Stock">In Stock</option>
+                  <option value="Low Stock">Low Stock</option>
+                  <option value="Out of Stock">Out of Stock</option>
+                </select>
+              </label>
+              <label for="inventory-active-filter">
+                <span>Variant Status</span>
+                <select id="inventory-active-filter" data-inventory-active-filter>
+                  <option value="all">Active &amp; Inactive</option>
+                  <option value="active">Active</option>
+                  <option value="inactive">Inactive</option>
+                </select>
+              </label>
+              <label for="inventory-sort">
+                <span>Sort By</span>
+                <select id="inventory-sort" data-inventory-sort>
+                  <option value="product">Product Name</option>
+                  <option value="sku">SKU</option>
+                  <option value="stock-asc">Stock: Low to High</option>
+                  <option value="stock-desc">Stock: High to Low</option>
+                  <option value="updated">Recently Updated</option>
+                </select>
+              </label>
+              <button class="btn ghost admin-inventory-clear" type="button" data-inventory-clear>Clear Filters</button>
+            </div>
+
+            <div class="admin-inventory-results-head">
+              <p data-inventory-result-count aria-live="polite">0 variants</p>
+            </div>
+
+            <div class="admin-inventory-empty" data-inventory-empty hidden>No inventory variants match these filters.</div>
+
+            <div class="admin-inventory-table-wrap" data-inventory-table-wrap>
+              <table class="admin-inventory-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Product</th>
+                    <th scope="col">Category</th>
+                    <th scope="col">Variant</th>
+                    <th scope="col">SKU</th>
+                    <th scope="col" class="numeric">Current Stock</th>
+                    <th scope="col" class="numeric">Low-Stock Threshold</th>
+                    <th scope="col">Stock Status</th>
+                    <th scope="col">Variant Status</th>
+                    <th scope="col">Last Updated</th>
+                    <th scope="col">Action</th>
+                  </tr>
+                </thead>
+                <tbody data-inventory-table-body></tbody>
+              </table>
+            </div>
+            <div class="admin-inventory-mobile-list" data-inventory-mobile-list aria-label="Inventory variants"></div>
+
+            <section class="admin-inventory-activity" aria-labelledby="inventory-activity-title">
+              <div class="admin-inventory-activity-head">
+                <div>
+                  <p class="eyebrow lime">Audit Ledger</p>
+                  <h3 id="inventory-activity-title">Recent Inventory Activity</h3>
+                </div>
+                <p data-inventory-activity-count aria-live="polite">0 movements</p>
+              </div>
+              <div class="admin-inventory-activity-filters" aria-label="Inventory activity filters">
+                <label for="inventory-activity-search">
+                  <span>Product or SKU</span>
+                  <input id="inventory-activity-search" type="search" placeholder="Search activity" autocomplete="off" data-inventory-activity-search />
+                </label>
+                <label for="inventory-movement-filter">
+                  <span>Movement Type</span>
+                  <select id="inventory-movement-filter" data-inventory-movement-filter>
+                    <option value="all">All Movement Types</option>
+                    <option value="Initial Stock">Initial Stock</option>
+                    <option value="Admin Adjustment">Admin Adjustment</option>
+                    <option value="Order Deduction">Order Deduction</option>
+                    <option value="Cancellation Restoration">Cancellation Restoration</option>
+                  </select>
+                </label>
+                <label for="inventory-activity-date">
+                  <span>Date</span>
+                  <input id="inventory-activity-date" type="date" data-inventory-activity-date />
+                </label>
+              </div>
+              <div class="admin-inventory-activity-list" data-inventory-activity-list></div>
+              <div class="admin-inventory-empty" data-inventory-activity-empty hidden>No inventory activity matches these filters.</div>
+            </section>
+          </div>
+        </section>
       </div>
     </section>
 
@@ -195,6 +336,61 @@
       </div>
     </footer>
   </main>
+
+  <div class="admin-inventory-modal" data-inventory-adjust-modal aria-hidden="true" hidden>
+    <section class="admin-inventory-modal__panel" role="dialog" aria-modal="true" aria-labelledby="inventory-adjust-title" tabindex="-1" data-inventory-adjust-panel>
+      <div class="drawer-head">
+        <div>
+          <p class="eyebrow lime">Inventory Control</p>
+          <h3 id="inventory-adjust-title">Adjust Stock</h3>
+        </div>
+        <button class="close-btn" type="button" data-inventory-adjust-close aria-label="Close stock adjustment">×</button>
+      </div>
+
+      <div data-inventory-adjust-form-view>
+        <dl class="admin-inventory-adjust-summary">
+          <div><dt>Product</dt><dd data-adjust-product-name></dd></div>
+          <div><dt>Product ID</dt><dd data-adjust-product-id></dd></div>
+          <div><dt>Variant</dt><dd data-adjust-variant-label></dd></div>
+          <div><dt>SKU</dt><dd data-adjust-sku></dd></div>
+          <div><dt>Current Stock</dt><dd data-adjust-current-stock></dd></div>
+          <div><dt>Low-Stock Threshold</dt><dd data-adjust-threshold></dd></div>
+          <div><dt>Stock State</dt><dd data-adjust-stock-state></dd></div>
+          <div><dt>Variant State</dt><dd data-adjust-active-state></dd></div>
+        </dl>
+
+        <form class="admin-inventory-adjust-form" data-inventory-adjust-form>
+          <label for="inventory-new-stock">
+            <span>New Stock Quantity</span>
+            <input id="inventory-new-stock" name="newStock" type="number" inputmode="numeric" min="0" max="2147483647" step="1" required data-adjust-new-stock />
+          </label>
+          <label for="inventory-adjust-reason">
+            <span>Reason</span>
+            <textarea id="inventory-adjust-reason" name="reason" minlength="3" maxlength="500" required placeholder="Example: Physical stock count correction" data-adjust-reason></textarea>
+          </label>
+          <div class="admin-inventory-adjust-preview" data-adjust-preview aria-live="polite"></div>
+          <p class="admin-inventory-adjust-feedback" data-adjust-feedback role="alert" aria-live="assertive" hidden></p>
+          <button class="btn ghost admin-inventory-adjust-refresh" type="button" data-inventory-adjust-refresh hidden>Refresh Inventory</button>
+          <div class="admin-inventory-adjust-actions">
+            <button class="btn ghost" type="button" data-inventory-adjust-cancel>Cancel</button>
+            <button class="btn primary" type="submit" data-inventory-adjust-submit disabled aria-disabled="true" aria-busy="false">Confirm Adjustment</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="admin-inventory-adjust-success" data-inventory-adjust-success role="status" aria-live="polite" hidden>
+        <p class="eyebrow lime">Adjustment Confirmed</p>
+        <h4>Inventory updated successfully</h4>
+        <dl>
+          <div><dt>Previous Stock</dt><dd data-adjust-success-previous></dd></div>
+          <div><dt>New Stock</dt><dd data-adjust-success-new></dd></div>
+          <div><dt>Adjustment</dt><dd data-adjust-success-delta></dd></div>
+          <div><dt>Movement ID</dt><dd data-adjust-success-movement></dd></div>
+        </dl>
+        <button class="btn primary" type="button" data-inventory-adjust-done>Done</button>
+      </div>
+    </section>
+  </div>
 
   <div class="drawer-overlay" data-drawer-overlay></div>
   <aside id="mobile-drawer" class="mobile-drawer" aria-hidden="true">

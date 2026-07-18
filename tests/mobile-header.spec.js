@@ -99,6 +99,144 @@ function createVariantRows(productId, labels, states = {}) {
   });
 }
 
+function createAdminInventoryFixtures() {
+  const products = {
+    shoes: {
+      id: "predator-elite-fg",
+      name: "Predator Elite FG",
+      category: "Football Shoes",
+      image: "assets/shoe-retro-leather.avif",
+      is_active: true,
+    },
+    jersey: {
+      id: "elite-home-jersey",
+      name: "Elite Home Jersey",
+      category: "Jerseys",
+      image: "assets/jersey-elite-home.avif",
+      is_active: true,
+    },
+    ball: {
+      id: "premier-match-ball",
+      name: "Premier Match Ball",
+      category: "Footballs",
+      image: "assets/football-fan-edition-ball.avif",
+      is_active: true,
+    },
+  };
+  const inventoryVariants = [
+    {
+      id: "10000000-0000-4000-8000-000000000001",
+      product_id: products.shoes.id,
+      sku: "ATF-PREDATOR-ELITE-FG-UK6",
+      variant_label: "UK 6",
+      stock_quantity: 10,
+      low_stock_threshold: 3,
+      is_active: true,
+      updated_at: "2026-07-17T09:00:00.000Z",
+      products: products.shoes,
+    },
+    {
+      id: "10000000-0000-4000-8000-000000000002",
+      product_id: products.shoes.id,
+      sku: "ATF-PREDATOR-ELITE-FG-UK7",
+      variant_label: "UK 7",
+      stock_quantity: 2,
+      low_stock_threshold: 3,
+      is_active: true,
+      updated_at: "2026-07-17T09:05:00.000Z",
+      products: products.shoes,
+    },
+    {
+      id: "10000000-0000-4000-8000-000000000003",
+      product_id: products.jersey.id,
+      sku: "ATF-ELITE-HOME-JERSEY-M",
+      variant_label: "M",
+      stock_quantity: 0,
+      low_stock_threshold: 3,
+      is_active: true,
+      updated_at: "2026-07-17T09:10:00.000Z",
+      products: products.jersey,
+    },
+    {
+      id: "10000000-0000-4000-8000-000000000004",
+      product_id: products.jersey.id,
+      sku: "ATF-ELITE-HOME-JERSEY-L",
+      variant_label: "L",
+      stock_quantity: 7,
+      low_stock_threshold: 3,
+      is_active: false,
+      updated_at: "2026-07-17T09:15:00.000Z",
+      products: products.jersey,
+    },
+    {
+      id: "10000000-0000-4000-8000-000000000005",
+      product_id: products.ball.id,
+      sku: "ATF-PREMIER-MATCH-BALL-SIZE5",
+      variant_label: "Size 5",
+      stock_quantity: 12,
+      low_stock_threshold: 3,
+      is_active: true,
+      updated_at: "2026-07-17T09:20:00.000Z",
+      products: products.ball,
+    },
+  ];
+  const movement = (index, variantIndex, movementType, delta, resultingStock, orderId = null) => {
+    const variant = inventoryVariants[variantIndex];
+    return {
+      id: `20000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      product_variant_id: variant.id,
+      order_id: orderId,
+      movement_type: movementType,
+      quantity_delta: delta,
+      resulting_stock_quantity: resultingStock,
+      reason: `${movementType} test record`,
+      created_at: `2026-07-17T0${index}:00:00.000Z`,
+      product_variants: {
+        id: variant.id,
+        product_id: variant.product_id,
+        sku: variant.sku,
+        variant_label: variant.variant_label,
+        products: variant.products,
+      },
+    };
+  };
+  return {
+    inventoryVariants,
+    inventoryMovements: [
+      movement(4, 0, "Cancellation Restoration", 1, 10, "order-restored"),
+      movement(3, 0, "Order Deduction", -1, 9, "order-deducted"),
+      movement(2, 1, "Admin Adjustment", -2, 2),
+      movement(1, 4, "Initial Stock", 10, 10),
+    ],
+  };
+}
+
+function createAdminInventoryVariantSet(count = 381, namePrefix = "Catalogue Product") {
+  const categories = ["Football Shoes", "Jerseys", "T-Shirts", "Footballs", "Accessories"];
+  return Array.from({ length: count }, (_, index) => {
+    const productIndex = index % 105;
+    const productId = `catalog-product-${String(productIndex + 1).padStart(3, "0")}`;
+    const sequence = String(index + 1).padStart(12, "0");
+    return {
+      id: `40000000-0000-4000-8000-${sequence}`,
+      product_id: productId,
+      sku: `ATF-CATALOG-${String(index + 1).padStart(3, "0")}`,
+      variant_label: `Variant ${String(index + 1).padStart(3, "0")}`,
+      stock_quantity: 10,
+      low_stock_threshold: 3,
+      is_active: true,
+      updated_at: `2026-07-17T10:${String(index % 60).padStart(2, "0")}:00.000Z`,
+      products: {
+        id: productId,
+        name: `${namePrefix} ${String(productIndex + 1).padStart(3, "0")}`,
+        category: categories[productIndex % categories.length],
+        image: "assets/hero-football-boot.avif",
+        is_active: true,
+      },
+    };
+  });
+}
+
 async function openDrawer(page) {
   const menuButton = page.locator(".menu-toggle");
   const drawer = page.locator("#mobile-drawer");
@@ -141,6 +279,8 @@ async function installSupabaseStub(page, options = {}) {
     let remainingPlaceOrderFailures = Number(config.failPlaceOrderAttempts || 0);
     let remainingCartMergeFailures = Number(config.failCartMergeAttempts || 0);
     let remainingOrderLoadFailures = Number(config.failOrderLoadAttempts || 0);
+    let remainingAdjustmentFailures = Number(config.failAdjustmentAttempts || 0);
+    let remainingInventoryLoadFailures = Number(config.failInventoryLoadAttempts || 0);
     const listeners = [];
     const state = {
       rpcs: [],
@@ -149,6 +289,7 @@ async function installSupabaseStub(page, options = {}) {
       paymentStatusUpdateCalls: [],
       cancellationRequestCalls: [],
       cancellationReviewCalls: [],
+      adjustmentCalls: [],
       inserts: [],
       updates: [],
       selects: [],
@@ -157,6 +298,11 @@ async function installSupabaseStub(page, options = {}) {
       legacyVariantCarts: JSON.parse(JSON.stringify(config.legacyVariantCarts || {})),
       cloudWishlists: JSON.parse(JSON.stringify(config.cloudWishlists || {})),
       variantRows: JSON.parse(JSON.stringify(config.variantRows || [])),
+      inventoryVariants: JSON.parse(JSON.stringify(config.inventoryVariants || [])),
+      inventoryVariantsByUser: JSON.parse(JSON.stringify(config.inventoryVariantsByUser || {})),
+      inventoryMovements: JSON.parse(JSON.stringify(config.inventoryMovements || [])),
+      inventorySelectCalls: 0,
+      inventoryLoadDelayByUser: JSON.parse(JSON.stringify(config.inventoryLoadDelayByUser || {})),
     };
     window.__attractionSupabaseTestState = state;
 
@@ -181,6 +327,7 @@ async function installSupabaseStub(page, options = {}) {
     };
     const mergeReceipts = new Set();
     const variantMergeReceipts = new Map();
+    const adjustmentReceipts = new Map();
 
     const cartFor = (userId) => {
       if (!state.cloudCarts[userId]) state.cloudCarts[userId] = [];
@@ -406,7 +553,102 @@ async function installSupabaseStub(page, options = {}) {
           });
           return { data: { idempotent_replay: false }, error: null };
         }
-        if (name === "is_admin") return { data: Boolean(config.isAdmin), error: config.adminError ? { message: config.adminError } : null };
+        if (name === "is_admin") {
+          const adminUserId = currentUser?.id;
+          const delay = Number(config.adminCheckDelayByUser?.[adminUserId] || config.adminCheckDelay || 0);
+          if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+          const isAdmin = config.adminByUserId
+            ? Boolean(config.adminByUserId[adminUserId])
+            : Boolean(config.isAdmin);
+          return { data: isAdmin, error: config.adminError ? { message: config.adminError } : null };
+        }
+        if (name === "adjust_variant_stock") {
+          state.adjustmentCalls.push(payload);
+          if (!currentUser) return { data: null, error: { message: "Authentication required." } };
+          if (!config.isAdmin) return { data: null, error: { message: "Admin access required." } };
+          if (config.adjustmentDelay) await new Promise((resolve) => setTimeout(resolve, config.adjustmentDelay));
+          if (remainingAdjustmentFailures > 0) {
+            remainingAdjustmentFailures -= 1;
+            return { data: null, error: { message: config.adjustmentError || "Temporary network failure" } };
+          }
+          if (config.adjustmentError && !config.failAdjustmentAttempts) {
+            return { data: null, error: { message: config.adjustmentError } };
+          }
+
+          const signature = JSON.stringify({
+            variant: payload.p_product_variant_id,
+            expected: payload.p_expected_stock_quantity,
+            quantity: payload.p_new_stock_quantity,
+            reason: payload.p_reason,
+          });
+          const receiptKey = `${currentUser.id}:${payload.p_idempotency_key}`;
+          const existingReceipt = adjustmentReceipts.get(receiptKey);
+          if (existingReceipt) {
+            if (existingReceipt.signature !== signature) {
+              return { data: null, error: { message: "This adjustment identifier was already used for different inventory details." } };
+            }
+            return { data: [{ ...existingReceipt.result, idempotent_replay: true }], error: null };
+          }
+
+          const variant = state.inventoryVariants.find((row) => row.id === payload.p_product_variant_id);
+          if (!variant) return { data: null, error: { message: "Product variant not found." } };
+          if (config.staleVariantId === variant.id && !config.staleVariantTriggered) {
+            config.staleVariantTriggered = true;
+            variant.stock_quantity = Number(config.staleStockQuantity ?? variant.stock_quantity + 1);
+            variant.updated_at = "2026-07-17T10:20:00.000Z";
+          }
+          if (variant.stock_quantity !== payload.p_expected_stock_quantity) {
+            return { data: null, error: { message: "Inventory changed. Refresh the variant and try again." } };
+          }
+          if (variant.stock_quantity === payload.p_new_stock_quantity) {
+            return { data: null, error: { message: "Stock quantity is already set to this value." } };
+          }
+
+          const previousStock = variant.stock_quantity;
+          const newStock = payload.p_new_stock_quantity;
+          const delta = newStock - previousStock;
+          const adjustedAt = "2026-07-17T10:30:00.000Z";
+          const movementId = `30000000-0000-4000-8000-${String(state.inventoryMovements.length + 1).padStart(12, "0")}`;
+          variant.stock_quantity = newStock;
+          variant.updated_at = adjustedAt;
+          const product = Array.isArray(variant.products) ? variant.products[0] : variant.products;
+          state.inventoryMovements.unshift({
+            id: movementId,
+            product_variant_id: variant.id,
+            order_id: null,
+            movement_type: "Admin Adjustment",
+            quantity_delta: delta,
+            resulting_stock_quantity: newStock,
+            reason: payload.p_reason,
+            created_at: adjustedAt,
+            product_variants: {
+              id: variant.id,
+              product_id: variant.product_id,
+              sku: variant.sku,
+              variant_label: variant.variant_label,
+              products: product,
+            },
+          });
+          const stockState = newStock === 0
+            ? "Out of Stock"
+            : newStock <= variant.low_stock_threshold ? "Low Stock" : "In Stock";
+          const result = {
+            product_variant_id: variant.id,
+            product_id: variant.product_id,
+            sku: variant.sku,
+            variant_label: variant.variant_label,
+            previous_stock_quantity: previousStock,
+            new_stock_quantity: newStock,
+            quantity_delta: delta,
+            low_stock_threshold: variant.low_stock_threshold,
+            stock_state: stockState,
+            movement_id: movementId,
+            adjusted_at: adjustedAt,
+            idempotent_replay: false,
+          };
+          adjustmentReceipts.set(receiptKey, { signature, result });
+          return { data: [result], error: null };
+        }
         if (["set_cart_item", "remove_cart_item", "clear_cart", "merge_guest_cart"].includes(name)) {
           if (name === "merge_guest_cart" && remainingCartMergeFailures > 0) {
             remainingCartMergeFailures -= 1;
@@ -594,16 +836,23 @@ async function installSupabaseStub(page, options = {}) {
           return Promise.resolve({ data: payload, error: null });
         },
         select: (columns = "*") => {
+          const selectUserId = currentUser?.id;
           const filters = [];
-          let orderBy = null;
-          state.selects.push({ table, columns, filters });
+          const orderBy = [];
+          let limitCount = null;
+          let rangeStart = null;
+          let rangeEnd = null;
+          const selectRecord = { table, columns, filters, orderBy, range: null };
+          state.selects.push(selectRecord);
           const execute = async () => {
             if (table === "cart_items") {
+              if (config.collectionLoadDelay) await new Promise((resolve) => setTimeout(resolve, config.collectionLoadDelay));
               if (config.failCartLoad) return { data: null, error: { message: "Cart load failed" } };
               const userId = filters.find(([column]) => column === "user_id")?.[1] || currentUser?.id;
               return { data: joinedCartRows(userId), error: null };
             }
             if (table === "wishlist_items") {
+              if (config.collectionLoadDelay) await new Promise((resolve) => setTimeout(resolve, config.collectionLoadDelay));
               if (config.failWishlistLoad) return { data: null, error: { message: "Wishlist load failed" } };
               const userId = filters.find(([column]) => column === "user_id")?.[1] || currentUser?.id;
               return { data: joinedWishlistRows(userId), error: null };
@@ -622,15 +871,63 @@ async function installSupabaseStub(page, options = {}) {
               filters.forEach(([column, value]) => {
                 rows = rows.filter((row) => row[column] === value);
               });
-              if (orderBy) {
+              if (orderBy.length) {
                 rows.sort((first, second) => {
-                  const firstValue = first[orderBy.column];
-                  const secondValue = second[orderBy.column];
-                  const direction = orderBy.ascending ? 1 : -1;
-                  return String(firstValue).localeCompare(String(secondValue)) * direction;
+                  for (const order of orderBy) {
+                    const direction = order.ascending ? 1 : -1;
+                    const result = String(first[order.column]).localeCompare(String(second[order.column])) * direction;
+                    if (result) return result;
+                  }
+                  return 0;
                 });
               }
               return { data: rows, error: null };
+            }
+            if (table === "product_variants") {
+              state.inventorySelectCalls += 1;
+              const delay = Number(state.inventoryLoadDelayByUser?.[selectUserId] || config.inventoryLoadDelay || 0);
+              if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+              if ((config.failInventoryLoadOnCalls || []).includes(state.inventorySelectCalls)) {
+                return { data: null, error: { message: "Private inventory load failure" } };
+              }
+              if (remainingInventoryLoadFailures > 0) {
+                remainingInventoryLoadFailures -= 1;
+                return { data: null, error: { message: "Private inventory load failure" } };
+              }
+              if (config.inventoryVariantsError) return { data: null, error: { message: config.inventoryVariantsError } };
+              const ownedRows = state.inventoryVariantsByUser[selectUserId] || state.inventoryVariants;
+              let rows = [...ownedRows];
+              filters.forEach(([column, value]) => {
+                rows = rows.filter((row) => row[column] === value);
+              });
+              if (orderBy.length) {
+                rows.sort((first, second) => {
+                  for (const order of orderBy) {
+                    const direction = order.ascending ? 1 : -1;
+                    const result = String(first[order.column] || "").localeCompare(String(second[order.column] || "")) * direction;
+                    if (result) return result;
+                  }
+                  return 0;
+                });
+              }
+              if (rangeStart !== null && rangeEnd !== null) rows = rows.slice(rangeStart, rangeEnd + 1);
+              else if (limitCount) rows = rows.slice(0, limitCount);
+              return { data: rows, error: null };
+            }
+            if (table === "inventory_movements") {
+              if (config.inventoryMovementsError) return { data: null, error: { message: config.inventoryMovementsError } };
+              let rows = [...state.inventoryMovements];
+              if (orderBy.length) {
+                rows.sort((first, second) => {
+                  for (const order of orderBy) {
+                    const direction = order.ascending ? 1 : -1;
+                    const result = String(first[order.column] || "").localeCompare(String(second[order.column] || "")) * direction;
+                    if (result) return result;
+                  }
+                  return 0;
+                });
+              }
+              return { data: limitCount ? rows.slice(0, limitCount) : rows, error: null };
             }
 
             return { data: [], error: null };
@@ -641,8 +938,18 @@ async function installSupabaseStub(page, options = {}) {
               return builder;
             },
             order: (column, options = {}) => {
-              orderBy = { column, ascending: options.ascending !== false };
-              return execute();
+              orderBy.push({ column, ascending: options.ascending !== false });
+              return builder;
+            },
+            limit: (count) => {
+              limitCount = count;
+              return builder;
+            },
+            range: (from, to) => {
+              rangeStart = from;
+              rangeEnd = to;
+              selectRecord.range = [from, to];
+              return builder;
             },
             then: (resolve, reject) => execute().then(resolve, reject),
           };
@@ -655,6 +962,10 @@ async function installSupabaseStub(page, options = {}) {
           },
         }),
       }),
+    };
+    window.__setAttractionTestUser = (nextUser, event = nextUser ? "SIGNED_IN" : "SIGNED_OUT") => {
+      currentUser = nextUser;
+      listeners.forEach((listener) => listener(event, nextUser ? { user: nextUser } : null));
     };
   }, options);
 }
@@ -3687,6 +3998,502 @@ test("admin dashboard renders orders and updates order status", async ({ page })
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expectNoHorizontalOverflow(page);
+});
+
+test("admin inventory stays hidden until authorization and is unavailable to non-admin users", async ({ page }) => {
+  const fixtures = createAdminInventoryFixtures();
+  await installSupabaseStub(page, {
+    isAdmin: false,
+    sessionDelay: 150,
+    user: { id: "inventory-non-admin", email: "player@example.com", user_metadata: { full_name: "Player" } },
+    ...fixtures,
+  });
+  await page.goto("/admin.html", { waitUntil: "domcontentloaded" });
+
+  await expect(page.getByRole("heading", { name: "Checking admin access..." })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Inventory" })).toBeHidden();
+  await expect(page.getByRole("heading", { name: "Access denied", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Inventory" })).toBeHidden();
+
+  const selectedTables = await page.evaluate(() => window.__attractionSupabaseTestState.selects.map((entry) => entry.table));
+  expect(selectedTables).not.toContain("product_variants");
+  expect(selectedTables).not.toContain("inventory_movements");
+});
+
+test("admin account switching synchronously removes the previous inventory and ignores stale reads", async ({ page }) => {
+  const fixtures = createAdminInventoryFixtures();
+  const userA = { id: "inventory-admin-a", email: "admin-a@example.com" };
+  const userB = { id: "inventory-admin-b", email: "admin-b@example.com" };
+  const userARow = structuredClone(fixtures.inventoryVariants[0]);
+  userARow.products.name = "User A Private Inventory";
+  const userBRow = structuredClone(fixtures.inventoryVariants[4]);
+  userBRow.products.name = "User B Authorized Inventory";
+  await installSupabaseStub(page, {
+    user: userA,
+    adminByUserId: { [userA.id]: true, [userB.id]: true },
+    collectionLoadDelay: 150,
+    inventoryVariantsByUser: { [userA.id]: [userARow], [userB.id]: [userBRow] },
+    inventoryMovements: [],
+  });
+  await page.goto("/admin.html", { waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "Inventory" }).click();
+  const mobileInventory = page.locator("[data-inventory-mobile-list]");
+  await expect(mobileInventory.getByText("User A Private Inventory")).toBeVisible();
+  await mobileInventory.locator('[data-inventory-row] [data-inventory-adjust]').first().click();
+  await expect(page.locator("[data-inventory-adjust-modal]")).toBeVisible();
+
+  await page.evaluate(({ nextUser }) => {
+    window.__attractionSupabaseTestState.inventoryLoadDelayByUser["inventory-admin-a"] = 250;
+    document.querySelector("[data-inventory-refresh]").click();
+    window.__setAttractionTestUser(nextUser, "SIGNED_IN");
+  }, { nextUser: userB });
+
+  await expect(page.getByRole("heading", { name: "Checking admin access..." })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Inventory" })).toBeHidden();
+  await expect(page.locator("[data-inventory-table-body] tr")).toHaveCount(0);
+  await expect(page.getByText("User A Private Inventory")).toHaveCount(0);
+  await expect(page.locator("[data-inventory-adjust-modal]")).toBeHidden();
+
+  await expect(page.getByRole("tab", { name: "Inventory" })).toBeVisible();
+  await page.getByRole("tab", { name: "Inventory" }).click();
+  await expect(mobileInventory.getByText("User B Authorized Inventory")).toBeVisible();
+  await page.waitForTimeout(300);
+  await expect(page.getByText("User A Private Inventory")).toHaveCount(0);
+});
+
+test("admin inventory calculates metrics and supports search filters sorting activity and mobile cards", async ({ page }) => {
+  const fixtures = createAdminInventoryFixtures();
+  await installSupabaseStub(page, {
+    isAdmin: true,
+    user: { id: "inventory-admin", email: "admin@example.com", user_metadata: { full_name: "Inventory Admin" } },
+    ...fixtures,
+  });
+  await page.setViewportSize({ width: 1391, height: 871 });
+  await page.goto("/admin.html", { waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "Inventory" }).click();
+
+  await expect(page.getByRole("heading", { name: "Inventory Management" })).toBeVisible();
+  await expect(page.locator('[data-inventory-metric="products"]')).toHaveText("3");
+  await expect(page.locator('[data-inventory-metric="variants"]')).toHaveText("5");
+  await expect(page.locator('[data-inventory-metric="stock"]')).toHaveText("31");
+  await expect(page.locator('[data-inventory-metric="low"]')).toHaveText("1");
+  await expect(page.locator('[data-inventory-metric="out"]')).toHaveText("1");
+  await expect(page.locator('[data-inventory-metric="inactive"]')).toHaveText("1");
+  await expect(page.locator("[data-inventory-table-body] tr")).toHaveCount(5);
+  await expect(page.locator("[data-inventory-table-body]")).toContainText("UK 6");
+  await expect(page.locator("[data-inventory-table-body]")).toContainText("UK 7");
+
+  const activity = page.locator("[data-inventory-activity-list]");
+  await expect(activity).toContainText("Initial Stock");
+  await expect(activity).toContainText("Admin Adjustment");
+  await expect(activity).toContainText("Order Deduction");
+  await expect(activity).toContainText("Cancellation Restoration");
+  await expect(activity).toContainText("+1");
+  await expect(activity).toContainText("−1");
+
+  await page.locator("[data-inventory-search]").fill("ATF-PREDATOR-ELITE-FG-UK7");
+  await expect(page.locator("[data-inventory-table-body] tr")).toHaveCount(1);
+  await expect(page.locator("[data-inventory-table-body]")).toContainText("UK 7");
+  await page.getByRole("button", { name: "Clear Filters" }).click();
+
+  await page.locator("[data-inventory-category]").selectOption("Jerseys");
+  await expect(page.locator("[data-inventory-table-body] tr")).toHaveCount(2);
+  await page.locator("[data-inventory-category]").selectOption("all");
+  await page.locator("[data-inventory-stock-filter]").selectOption("Low Stock");
+  await expect(page.locator("[data-inventory-table-body] tr")).toHaveCount(1);
+  await expect(page.locator("[data-inventory-table-body]")).toContainText("UK 7");
+  await page.locator("[data-inventory-stock-filter]").selectOption("all");
+  await page.locator("[data-inventory-active-filter]").selectOption("inactive");
+  await expect(page.locator("[data-inventory-table-body] tr")).toHaveCount(1);
+  await expect(page.locator("[data-inventory-table-body]")).toContainText("Inactive");
+  await page.getByRole("button", { name: "Clear Filters" }).click();
+
+  await page.locator("[data-inventory-sort]").selectOption("stock-asc");
+  await expect(page.locator("[data-inventory-table-body] tr").first().locator("[data-inventory-stock-value]")).toHaveText("0");
+  await page.locator("[data-inventory-movement-filter]").selectOption("Order Deduction");
+  await expect(page.locator("[data-inventory-activity-list] .admin-inventory-activity-item")).toHaveCount(1);
+  await expect(page.locator("[data-inventory-activity-list]")).toContainText("order-deducted");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator("[data-inventory-table-wrap]")).toBeHidden();
+  await expect(page.locator("[data-inventory-mobile-list] .admin-inventory-mobile-card")).toHaveCount(5);
+  await expect(page.locator("[data-inventory-mobile-list] .admin-inventory-adjust-button").first()).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("admin inventory paginates all 381 variants and deduplicates repeated UUIDs", async ({ page }) => {
+  const variants = createAdminInventoryVariantSet();
+  const rowsWithDuplicate = [...variants, structuredClone(variants[199])];
+  await installSupabaseStub(page, {
+    isAdmin: true,
+    user: { id: "pagination-admin", email: "admin@example.com" },
+    inventoryVariants: rowsWithDuplicate,
+    inventoryMovements: [],
+  });
+  await page.goto("/admin.html", { waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "Inventory" }).click();
+
+  await expect(page.locator('[data-inventory-metric="products"]')).toHaveText("105");
+  await expect(page.locator('[data-inventory-metric="variants"]')).toHaveText("381");
+  await expect(page.locator('[data-inventory-metric="stock"]')).toHaveText("3,810");
+  await expect(page.locator("[data-inventory-table-body] tr")).toHaveCount(381);
+  const ranges = await page.evaluate(() => window.__attractionSupabaseTestState.selects
+    .filter((entry) => entry.table === "product_variants")
+    .map((entry) => entry.range));
+  expect(ranges).toEqual([[0, 199], [200, 399]]);
+  await expect(page.locator(`[data-inventory-table-body] [data-inventory-row="${variants[199].id}"]`)).toHaveCount(1);
+});
+
+test("admin inventory load failure is retryable without exposing private errors", async ({ page }) => {
+  const fixtures = createAdminInventoryFixtures();
+  await installSupabaseStub(page, {
+    isAdmin: true,
+    failInventoryLoadAttempts: 1,
+    user: { id: "inventory-retry-admin", email: "admin@example.com" },
+    ...fixtures,
+  });
+  await page.goto("/admin.html", { waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "Inventory" }).click();
+
+  await expect(page.getByText("Inventory could not be loaded. Please try again.")).toBeVisible();
+  await expect(page.getByText("Private inventory load failure")).toHaveCount(0);
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.locator('[data-inventory-metric="variants"]')).toHaveText("5");
+});
+
+test("admin stock adjustment validates inputs, submits exact RPC data once, and refreshes metrics and activity", async ({ page }) => {
+  const fixtures = createAdminInventoryFixtures();
+  const variant = fixtures.inventoryVariants[0];
+  await installSupabaseStub(page, {
+    isAdmin: true,
+    adjustmentDelay: 100,
+    user: { id: "adjustment-admin", email: "admin@example.com" },
+    ...fixtures,
+  });
+  await page.setViewportSize({ width: 1391, height: 871 });
+  await page.goto("/admin.html", { waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "Inventory" }).click();
+  const row = page.locator(`[data-inventory-table-body] [data-inventory-row="${variant.id}"]`);
+  await row.getByRole("button", { name: /Adjust stock for Predator Elite FG, UK 6/ }).click();
+
+  const modal = page.locator("[data-inventory-adjust-modal]");
+  await expect(modal).toBeVisible();
+  await expect(modal).toContainText("Predator Elite FG");
+  await expect(modal).toContainText("ATF-PREDATOR-ELITE-FG-UK6");
+  const submit = modal.getByRole("button", { name: "Confirm Adjustment" });
+  await expect(submit).toBeDisabled();
+  await modal.locator("[data-adjust-new-stock]").fill("15");
+  await modal.locator("[data-adjust-reason]").fill("New shipment received");
+  await expect(submit).toBeEnabled();
+  await expect(modal.locator("[data-adjust-preview]")).toContainText("Adjustment: +5");
+  await modal.locator("[data-inventory-adjust-form]").evaluate((form) => {
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+  await expect(modal.locator("[data-inventory-adjust-submit]")).toBeDisabled();
+  await expect(modal.locator("[data-inventory-adjust-submit]")).toHaveAttribute("aria-busy", "true");
+
+  await expect(modal.getByRole("heading", { name: "Inventory updated successfully" })).toBeVisible();
+  await expect(modal.locator("[data-adjust-success-previous]")).toHaveText("10");
+  await expect(modal.locator("[data-adjust-success-new]")).toHaveText("15");
+  await expect(modal.locator("[data-adjust-success-delta]")).toHaveText("+5");
+  await expect(modal.locator("[data-adjust-success-movement]")).not.toBeEmpty();
+  await expect(page.locator(`[data-inventory-table-body] [data-inventory-row="${variant.id}"] [data-inventory-stock-value]`)).toHaveText("15");
+  await expect(page.locator('[data-inventory-metric="stock"]')).toHaveText("36");
+  await expect(page.locator("[data-inventory-activity-list]")).toContainText("New shipment received");
+
+  const state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(state.adjustmentCalls).toHaveLength(1);
+  expect(state.adjustmentCalls[0]).toMatchObject({
+    p_product_variant_id: variant.id,
+    p_expected_stock_quantity: 10,
+    p_new_stock_quantity: 15,
+    p_reason: "New shipment received",
+  });
+  expect(state.adjustmentCalls[0].p_idempotency_key).toMatch(/^[0-9a-f-]{36}$/i);
+  expect(state.inserts).toEqual([]);
+  expect(state.updates).toEqual([]);
+  await modal.getByRole("button", { name: "Done" }).click();
+  await expect(modal).toBeHidden();
+  await expect(page.locator("[data-inventory-activity-list]", { hasText: "New shipment received" }).locator(".admin-inventory-activity-item", { hasText: "New shipment received" })).toHaveCount(1);
+  await page.locator("[data-inventory-refresh]").click();
+  await expect(page.locator("[data-inventory-activity-list] .admin-inventory-activity-item", { hasText: "New shipment received" })).toHaveCount(1);
+});
+
+test("admin adjustment rejects invalid values and supports decreases to zero and inactive variants", async ({ page }) => {
+  const fixtures = createAdminInventoryFixtures();
+  const firstVariant = fixtures.inventoryVariants[0];
+  const lowVariant = fixtures.inventoryVariants[1];
+  const inactiveVariant = fixtures.inventoryVariants[3];
+  await installSupabaseStub(page, {
+    isAdmin: true,
+    user: { id: "validation-admin", email: "admin@example.com" },
+    ...fixtures,
+  });
+  await page.setViewportSize({ width: 1391, height: 871 });
+  await page.goto("/admin.html", { waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "Inventory" }).click();
+  await page.locator(`[data-inventory-table-body] [data-inventory-row="${firstVariant.id}"] [data-inventory-adjust]`).click();
+  const modal = page.locator("[data-inventory-adjust-modal]");
+  const quantity = modal.locator("[data-adjust-new-stock]");
+  const reason = modal.locator("[data-adjust-reason]");
+  const submit = modal.locator("[data-inventory-adjust-submit]");
+  const submitForm = () => modal.locator("[data-inventory-adjust-form]").evaluate((form) => {
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+
+  await quantity.fill("-1");
+  await reason.fill("Physical stock correction");
+  await expect(submit).toBeDisabled();
+  await submitForm();
+  await expect(modal.locator("[data-adjust-feedback]")).toContainText("whole stock quantity");
+  await quantity.fill("10");
+  await submitForm();
+  await expect(modal.locator("[data-adjust-feedback]")).toContainText("already set");
+  await quantity.fill("7");
+  await reason.fill("x");
+  await submitForm();
+  await expect(modal.locator("[data-adjust-feedback]")).toContainText("between 3 and 500");
+  await reason.fill("Damaged units removed");
+  for (const malformedValue of ["1e2", "1E2", "1.5", "0x10"]) {
+    await quantity.fill(malformedValue);
+    await expect(submit).toBeDisabled();
+  }
+  await quantity.fill("2147483647");
+  await expect(submit).toBeEnabled();
+  await quantity.fill("7");
+  await expect(modal.locator("[data-adjust-preview]")).toContainText("Adjustment: −3");
+  await submitForm();
+  await expect(modal.locator("[data-adjust-success-new]")).toHaveText("7");
+  await modal.getByRole("button", { name: "Done" }).click();
+
+  await page.locator(`[data-inventory-table-body] [data-inventory-row="${lowVariant.id}"] [data-inventory-adjust]`).click();
+  await modal.locator("[data-adjust-new-stock]").fill("0");
+  await modal.locator("[data-adjust-reason]").fill("Physical count reached zero");
+  await expect(modal.locator("[data-adjust-preview]")).toContainText("Adjustment: −2");
+  await submitForm();
+  await expect(modal.locator("[data-adjust-success-new]")).toHaveText("0");
+  await modal.getByRole("button", { name: "Done" }).click();
+
+  await page.locator(`[data-inventory-table-body] [data-inventory-row="${inactiveVariant.id}"] [data-inventory-adjust]`).click();
+  await modal.locator("[data-adjust-new-stock]").fill("8");
+  await modal.locator("[data-adjust-reason]").fill("Inactive variant physical count correction");
+  await submitForm();
+  await expect(modal.locator("[data-adjust-success-new]")).toHaveText("8");
+  const state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(state.adjustmentCalls).toHaveLength(3);
+  expect(state.adjustmentCalls[2].p_product_variant_id).toBe(inactiveVariant.id);
+});
+
+test("admin adjustment reuses a UUID after network failure", async ({ page }) => {
+  const fixtures = createAdminInventoryFixtures();
+  const variant = fixtures.inventoryVariants[0];
+  await installSupabaseStub(page, {
+    isAdmin: true,
+    failAdjustmentAttempts: 1,
+    user: { id: "retry-admin", email: "admin@example.com" },
+    ...fixtures,
+  });
+  await page.setViewportSize({ width: 1391, height: 871 });
+  await page.goto("/admin.html", { waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "Inventory" }).click();
+  await page.locator(`[data-inventory-table-body] [data-inventory-row="${variant.id}"] [data-inventory-adjust]`).click();
+  const modal = page.locator("[data-inventory-adjust-modal]");
+  await modal.locator("[data-adjust-new-stock]").fill("15");
+  await modal.locator("[data-adjust-reason]").fill("Demo stock reconciliation");
+  await modal.getByRole("button", { name: "Confirm Adjustment" }).click();
+  await expect(modal.locator("[data-adjust-feedback]")).toContainText("could not be adjusted");
+  const firstToken = await page.evaluate(() => window.__attractionSupabaseTestState.adjustmentCalls[0].p_idempotency_key);
+  await modal.getByRole("button", { name: "Confirm Adjustment" }).click();
+  await expect(modal.locator("[data-adjust-success-new]")).toHaveText("15");
+  const retryCalls = await page.evaluate(() => window.__attractionSupabaseTestState.adjustmentCalls);
+  expect(retryCalls[1].p_idempotency_key).toBe(firstToken);
+  await modal.getByRole("button", { name: "Done" }).click();
+});
+
+test("admin adjustment creates a new UUID when a failed payload changes", async ({ page }) => {
+  const fixtures = createAdminInventoryFixtures();
+  const variant = fixtures.inventoryVariants[0];
+  await installSupabaseStub(page, {
+    isAdmin: true,
+    failAdjustmentAttempts: 2,
+    user: { id: "changed-payload-admin", email: "admin@example.com" },
+    ...fixtures,
+  });
+  await page.setViewportSize({ width: 1391, height: 871 });
+  await page.goto("/admin.html", { waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "Inventory" }).click();
+  await page.locator(`[data-inventory-table-body] [data-inventory-row="${variant.id}"] [data-inventory-adjust]`).click();
+  const modal = page.locator("[data-inventory-adjust-modal]");
+  await modal.locator("[data-adjust-new-stock]").fill("15");
+  await modal.locator("[data-adjust-reason]").fill("First reviewed stock count");
+  await modal.getByRole("button", { name: "Confirm Adjustment" }).click();
+  await expect(modal.locator("[data-adjust-feedback]")).toContainText("could not be adjusted");
+
+  await modal.locator("[data-adjust-new-stock]").fill("16");
+  await modal.locator("[data-adjust-reason]").fill("Revised physical stock count");
+  await modal.getByRole("button", { name: "Confirm Adjustment" }).click();
+  await expect(modal.locator("[data-adjust-feedback]")).toContainText("could not be adjusted");
+
+  const calls = await page.evaluate(() => window.__attractionSupabaseTestState.adjustmentCalls);
+  expect(calls).toHaveLength(2);
+  expect(calls[1].p_idempotency_key).not.toBe(calls[0].p_idempotency_key);
+});
+
+test("admin stale-stock handling reloads the variant and requires a new reviewed attempt", async ({ page }) => {
+  const fixtures = createAdminInventoryFixtures();
+  const variant = fixtures.inventoryVariants[0];
+  await installSupabaseStub(page, {
+    isAdmin: true,
+    staleVariantId: variant.id,
+    staleStockQuantity: 12,
+    user: { id: "stale-admin", email: "admin@example.com" },
+    ...fixtures,
+  });
+  await page.setViewportSize({ width: 1391, height: 871 });
+  await page.goto("/admin.html", { waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "Inventory" }).click();
+  const trigger = page.locator(`[data-inventory-table-body] [data-inventory-row="${variant.id}"] [data-inventory-adjust]`);
+  await trigger.click();
+  const modal = page.locator("[data-inventory-adjust-modal]");
+  await modal.locator("[data-adjust-new-stock]").fill("15");
+  await modal.locator("[data-adjust-reason]").fill("Physical stock count correction");
+  await modal.getByRole("button", { name: "Confirm Adjustment" }).click();
+
+  await expect(modal.locator("[data-adjust-feedback]")).toContainText("latest quantity has been loaded");
+  await expect(modal.locator("[data-adjust-current-stock]")).toHaveText("12");
+  await expect(modal.locator("[data-adjust-preview]")).toContainText("Adjustment: +3");
+  const firstToken = await page.evaluate(() => window.__attractionSupabaseTestState.adjustmentCalls[0].p_idempotency_key);
+  await modal.getByRole("button", { name: "Confirm Adjustment" }).click();
+  await expect(modal.locator("[data-adjust-success-new]")).toHaveText("15");
+  const calls = await page.evaluate(() => window.__attractionSupabaseTestState.adjustmentCalls);
+  expect(calls[1].p_expected_stock_quantity).toBe(12);
+  expect(calls[1].p_idempotency_key).not.toBe(firstToken);
+});
+
+test("admin stale-stock refresh failure keeps submission disabled until an authoritative retry succeeds", async ({ page }) => {
+  const fixtures = createAdminInventoryFixtures();
+  const variant = fixtures.inventoryVariants[0];
+  await installSupabaseStub(page, {
+    isAdmin: true,
+    staleVariantId: variant.id,
+    staleStockQuantity: 12,
+    failInventoryLoadOnCalls: [2],
+    user: { id: "stale-refresh-admin", email: "admin@example.com" },
+    ...fixtures,
+  });
+  await page.goto("/admin.html", { waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "Inventory" }).click();
+  await page.locator(`[data-inventory-mobile-list] [data-inventory-row="${variant.id}"] [data-inventory-adjust]`).click();
+  const modal = page.locator("[data-inventory-adjust-modal]");
+  await modal.locator("[data-adjust-new-stock]").fill("15");
+  await modal.locator("[data-adjust-reason]").fill("Physical stock count correction");
+  await modal.getByRole("button", { name: "Confirm Adjustment" }).click();
+
+  await expect(modal.locator("[data-adjust-feedback]")).toContainText("latest quantity could not be loaded");
+  await expect(modal.locator("[data-inventory-adjust-submit]")).toBeDisabled();
+  const refresh = modal.getByRole("button", { name: "Refresh Inventory" });
+  await expect(refresh).toBeVisible();
+  await refresh.click();
+  await expect(modal.locator("[data-adjust-current-stock]")).toHaveText("12");
+  await expect(modal.locator("[data-adjust-preview]")).toContainText("Adjustment: +3");
+  await expect(modal.locator("[data-inventory-adjust-submit]")).toBeEnabled();
+});
+
+test("admin inventory modal supports Escape focus restoration and mobile overflow safety", async ({ page }) => {
+  const fixtures = createAdminInventoryFixtures();
+  await installSupabaseStub(page, {
+    isAdmin: true,
+    user: { id: "keyboard-admin", email: "admin@example.com" },
+    ...fixtures,
+  });
+  await page.setViewportSize({ width: 430, height: 932 });
+  await page.goto("/admin.html", { waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "Inventory" }).click();
+  const trigger = page.locator("[data-inventory-mobile-list] [data-inventory-adjust]").first();
+  await trigger.click();
+  const modal = page.locator("[data-inventory-adjust-modal]");
+  await expect(modal).toBeVisible();
+  await expect(page.locator("body")).toHaveClass(/no-scroll/);
+  await expect(modal.locator("[data-adjust-new-stock]")).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(modal.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(modal.locator("[data-adjust-new-stock]")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(modal).toBeHidden();
+  await expect(page.locator("body")).not.toHaveClass(/no-scroll/);
+  await expect(trigger).toBeFocused();
+  await expectNoHorizontalOverflow(page);
+});
+
+test("admin inventory ignores a delayed response after logout", async ({ page }) => {
+  const fixtures = createAdminInventoryFixtures();
+  await installSupabaseStub(page, {
+    isAdmin: true,
+    inventoryLoadDelay: 200,
+    user: { id: "delayed-inventory-admin", email: "admin@example.com" },
+    ...fixtures,
+  });
+  await page.goto("/admin.html", { waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "Inventory" }).click();
+  await page.evaluate(() => window.__attractionSupabaseClient.auth.signOut());
+
+  await expect(page.getByRole("heading", { name: "Admin Login Required" })).toBeVisible();
+  await page.waitForTimeout(250);
+  await expect(page.getByRole("tab", { name: "Inventory" })).toBeHidden();
+  await expect(page.locator("[data-inventory-table-body] tr")).toHaveCount(0);
+  await expect(page.getByText("Predator Elite FG")).toHaveCount(0);
+});
+
+test("admin inventory renders hostile database text literally without creating executable markup", async ({ page }) => {
+  const fixtures = createAdminInventoryFixtures();
+  const hostileProduct = '<img src=x onerror=alert(1)>';
+  const hostileSku = '<script>bad()</script>';
+  const hostileVariant = '\"><svg/onload=alert(1)>';
+  const hostileReason = '<b>Physical correction</b>';
+  fixtures.inventoryVariants[0].products.name = hostileProduct;
+  fixtures.inventoryVariants[0].sku = hostileSku;
+  fixtures.inventoryVariants[0].variant_label = hostileVariant;
+  fixtures.inventoryMovements[0].reason = hostileReason;
+  fixtures.inventoryMovements[0].product_variants.products.name = hostileProduct;
+  fixtures.inventoryMovements[0].product_variants.sku = hostileSku;
+  fixtures.inventoryMovements[0].product_variants.variant_label = hostileVariant;
+  let dialogTriggered = false;
+  page.on("dialog", async (dialog) => {
+    dialogTriggered = true;
+    await dialog.dismiss();
+  });
+  await installSupabaseStub(page, {
+    isAdmin: true,
+    user: { id: "hostile-text-admin", email: "admin@example.com" },
+    ...fixtures,
+  });
+  await page.goto("/admin.html", { waitUntil: "domcontentloaded" });
+  await page.getByRole("tab", { name: "Inventory" }).click();
+
+  const content = page.locator("[data-inventory-content]");
+  await expect(content).toContainText(hostileProduct);
+  await expect(content).toContainText(hostileSku);
+  await expect(content).toContainText(hostileVariant);
+  await expect(content).toContainText(hostileReason);
+  await expect(content.locator("script, [onerror], svg[onload]")).toHaveCount(0);
+  await page.locator(`[data-inventory-mobile-list] [data-inventory-row="${fixtures.inventoryVariants[0].id}"] [data-inventory-adjust]`).click();
+  const modal = page.locator("[data-inventory-adjust-modal]");
+  await expect(modal).toContainText(hostileProduct);
+  await expect(modal).toContainText(hostileSku);
+  await expect(modal).toContainText(hostileVariant);
+  await expect(modal.locator("script, [onerror], svg[onload]")).toHaveCount(0);
+  expect(dialogTriggered).toBe(false);
+});
+
+test("admin inventory frontend uses only the secure adjustment RPC for stock writes", async () => {
+  const source = fs.readFileSync(path.join(process.cwd(), "script.js"), "utf8");
+  expect(source).toContain('supabaseClient.rpc("adjust_variant_stock"');
+  expect(source).not.toMatch(/\.from\(["']product_variants["']\)\s*\.update\s*\(/s);
+  expect(source).not.toMatch(/\.from\(["']product_variants["']\)\s*\.insert\s*\(/s);
+  expect(source).not.toMatch(/\.from\(["']inventory_movements["']\)\s*\.insert\s*\(/s);
+  expect(source).not.toMatch(/adjust_variant_stock[\s\S]{0,500}p_user_id/);
 });
 
 test("eligible customers can request cancellation once through the secure RPC", async ({ page }) => {

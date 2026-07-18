@@ -109,6 +109,13 @@
   let myOrdersLoadVersion = 0;
   let activeCancellationOrderId = null;
   let cancellationRequestSubmitting = false;
+  let adminAccessGeneration = 0;
+  let adminInventoryLoadGeneration = 0;
+  let adminInventoryRows = [];
+  let adminInventoryMovements = [];
+  let adminInventoryLoadedUserId = null;
+  let adminAdjustmentState = null;
+  let adminAdjustmentReturnFocus = null;
   const variantsByProductId = new Map();
   const selectedVariantByProductId = new Map();
   const variantLoadStateByProductId = new Map();
@@ -135,6 +142,8 @@
   const PAYMENT_STATUSES = ["Unpaid", "Paid"];
   const CANCELLATION_REQUEST_STATUSES = ["None", "Pending", "Approved", "Rejected"];
   const CANCELLATION_WINDOW_MS = 24 * 60 * 60 * 1000;
+  const ADMIN_INVENTORY_PAGE_SIZE = 200;
+  const POSTGRESQL_INTEGER_MAX = 2147483647;
 
   const escapeHTML = (value = "") =>
     String(value).replace(/[&<>"']/g, (character) => ({
@@ -2109,6 +2118,870 @@
     });
   }
 
+  function getRelatedRecord(value) {
+    return Array.isArray(value) ? value[0] || null : value || null;
+  }
+
+  function getAdminInventoryStockState(row) {
+    if (!row.variantActive || !row.productActive) return "Inactive";
+    if (row.stockQuantity === 0) return "Out of Stock";
+    if (row.stockQuantity <= row.lowStockThreshold) return "Low Stock";
+    return "In Stock";
+  }
+
+  function normalizeAdminInventoryRow(row) {
+    const product = getRelatedRecord(row?.products);
+    const stockQuantity = Number(row?.stock_quantity);
+    const lowStockThreshold = Number(row?.low_stock_threshold);
+    const normalized = {
+      id: String(row?.id || ""),
+      productId: String(row?.product_id || product?.id || ""),
+      productName: String(product?.name || row?.product_name || row?.product_id || "Unknown Product"),
+      category: String(product?.category || row?.category || "Uncategorized"),
+      image: String(product?.image || row?.image || "assets/hero-football-boot.avif"),
+      productActive: product?.is_active !== false,
+      sku: String(row?.sku || ""),
+      variantLabel: String(row?.variant_label || ""),
+      stockQuantity: Number.isInteger(stockQuantity) && stockQuantity >= 0 ? stockQuantity : 0,
+      lowStockThreshold: Number.isInteger(lowStockThreshold) && lowStockThreshold >= 0 ? lowStockThreshold : 0,
+      variantActive: row?.is_active === true,
+      updatedAt: String(row?.updated_at || ""),
+    };
+    normalized.effectiveActive = normalized.productActive && normalized.variantActive;
+    normalized.stockState = getAdminInventoryStockState(normalized);
+    normalized.variantState = normalized.variantActive
+      ? normalized.productActive ? "Active" : "Product Inactive"
+      : "Inactive";
+    return normalized;
+  }
+
+  function normalizeAdminInventoryMovement(row) {
+    const variant = getRelatedRecord(row?.product_variants);
+    const product = getRelatedRecord(variant?.products);
+    const delta = Number(row?.quantity_delta);
+    const resultingStock = Number(row?.resulting_stock_quantity);
+    return {
+      id: String(row?.id || ""),
+      productVariantId: String(row?.product_variant_id || variant?.id || ""),
+      productId: String(variant?.product_id || product?.id || ""),
+      productName: String(product?.name || variant?.product_id || "Unknown Product"),
+      category: String(product?.category || "Uncategorized"),
+      variantLabel: String(variant?.variant_label || "Unknown Variant"),
+      sku: String(variant?.sku || "Not available"),
+      movementType: String(row?.movement_type || "Inventory Movement"),
+      quantityDelta: Number.isInteger(delta) ? delta : 0,
+      resultingStock: Number.isInteger(resultingStock) ? resultingStock : 0,
+      reason: String(row?.reason || "No reason recorded"),
+      orderId: row?.order_id ? String(row.order_id) : "",
+      createdAt: String(row?.created_at || ""),
+    };
+  }
+
+  function getAdminInventoryMetrics(rows) {
+    const activeRows = rows.filter((row) => row.effectiveActive);
+    return {
+      products: new Set(rows.map((row) => row.productId).filter(Boolean)).size,
+      variants: rows.length,
+      stock: rows.reduce((total, row) => total + row.stockQuantity, 0),
+      low: activeRows.filter((row) => row.stockState === "Low Stock").length,
+      out: activeRows.filter((row) => row.stockState === "Out of Stock").length,
+      inactive: rows.filter((row) => !row.effectiveActive).length,
+    };
+  }
+
+  function getAdminInventoryStatusClass(value) {
+    return String(value || "").toLowerCase().replace(/[^a-z]+/g, "-").replace(/^-|-$/g, "");
+  }
+
+  function updateAdminInventoryMetrics(page) {
+    const metrics = getAdminInventoryMetrics(adminInventoryRows);
+    Object.entries(metrics).forEach(([name, value]) => {
+      const node = $(`[data-inventory-metric="${name}"]`, page);
+      if (node) node.textContent = Number(value).toLocaleString("en-IN");
+    });
+  }
+
+  function updateAdminInventoryCategories(page) {
+    const select = $("[data-inventory-category]", page);
+    if (!select) return;
+    const currentValue = select.value;
+    const categories = [...new Set(adminInventoryRows.map((row) => row.category).filter(Boolean))]
+      .sort((first, second) => first.localeCompare(second));
+    select.innerHTML = `<option value="all">All Categories</option>${categories
+      .map((category) => `<option value="${escapeHTML(category)}">${escapeHTML(category)}</option>`)
+      .join("")}`;
+    select.value = categories.includes(currentValue) ? currentValue : "all";
+  }
+
+  function getFilteredAdminInventoryRows(page) {
+    const search = String($("[data-inventory-search]", page)?.value || "").trim().toLowerCase();
+    const category = $("[data-inventory-category]", page)?.value || "all";
+    const stockState = $("[data-inventory-stock-filter]", page)?.value || "all";
+    const activeState = $("[data-inventory-active-filter]", page)?.value || "all";
+    const sort = $("[data-inventory-sort]", page)?.value || "product";
+
+    const rows = adminInventoryRows.filter((row) => {
+      const searchable = [row.productName, row.productId, row.sku, row.variantLabel]
+        .join(" ")
+        .toLowerCase();
+      if (search && !searchable.includes(search)) return false;
+      if (category !== "all" && row.category !== category) return false;
+      if (stockState !== "all" && row.stockState !== stockState) return false;
+      if (activeState === "active" && !row.effectiveActive) return false;
+      if (activeState === "inactive" && row.effectiveActive) return false;
+      return true;
+    });
+
+    const compareText = (first, second) => first.localeCompare(second, undefined, { numeric: true });
+    rows.sort((first, second) => {
+      if (sort === "sku") return compareText(first.sku, second.sku);
+      if (sort === "stock-asc") return first.stockQuantity - second.stockQuantity || compareText(first.sku, second.sku);
+      if (sort === "stock-desc") return second.stockQuantity - first.stockQuantity || compareText(first.sku, second.sku);
+      if (sort === "updated") {
+        return new Date(second.updatedAt || 0).getTime() - new Date(first.updatedAt || 0).getTime()
+          || compareText(first.sku, second.sku);
+      }
+      return compareText(first.productName, second.productName)
+        || compareText(first.variantLabel, second.variantLabel);
+    });
+    return rows;
+  }
+
+  function renderAdminInventoryRows(page) {
+    const rows = getFilteredAdminInventoryRows(page);
+    const tableBody = $("[data-inventory-table-body]", page);
+    const mobileList = $("[data-inventory-mobile-list]", page);
+    const empty = $("[data-inventory-empty]", page);
+    const tableWrap = $("[data-inventory-table-wrap]", page);
+    const resultCount = $("[data-inventory-result-count]", page);
+    if (resultCount) resultCount.textContent = `${rows.length.toLocaleString("en-IN")} ${rows.length === 1 ? "variant" : "variants"}`;
+    if (empty) empty.hidden = rows.length > 0;
+    if (tableWrap) tableWrap.hidden = rows.length === 0;
+    if (mobileList) mobileList.hidden = rows.length === 0;
+
+    const renderButton = (row) => `
+      <button class="admin-inventory-adjust-button" type="button" data-inventory-adjust="${escapeHTML(row.id)}" aria-label="Adjust stock for ${escapeHTML(row.productName)}, ${escapeHTML(row.variantLabel)}">Adjust Stock</button>
+    `;
+    const renderBadge = (value, type = "stock") => `
+      <span class="admin-inventory-badge admin-inventory-badge--${type}-${getAdminInventoryStatusClass(value)}">${escapeHTML(value)}</span>
+    `;
+
+    if (tableBody) {
+      tableBody.innerHTML = rows.map((row) => `
+        <tr data-inventory-row="${escapeHTML(row.id)}">
+          <td>
+            <div class="admin-inventory-product">
+              <img src="${escapeHTML(row.image)}" alt="" loading="lazy" decoding="async" />
+              <div><strong>${escapeHTML(row.productName)}</strong><small>${escapeHTML(row.productId)}${row.productActive ? "" : " · Product Inactive"}</small></div>
+            </div>
+          </td>
+          <td>${escapeHTML(row.category)}</td>
+          <td><strong>${escapeHTML(row.variantLabel)}</strong></td>
+          <td><code>${escapeHTML(row.sku)}</code></td>
+          <td class="numeric" data-inventory-stock-value>${row.stockQuantity.toLocaleString("en-IN")}</td>
+          <td class="numeric">${row.lowStockThreshold.toLocaleString("en-IN")}</td>
+          <td>${renderBadge(row.stockState)}</td>
+          <td>${renderBadge(row.variantState, "variant")}</td>
+          <td><time datetime="${escapeHTML(row.updatedAt)}">${escapeHTML(formatOrderDate(row.updatedAt))}</time></td>
+          <td>${renderButton(row)}</td>
+        </tr>
+      `).join("");
+    }
+
+    if (mobileList) {
+      mobileList.innerHTML = rows.map((row) => `
+        <article class="admin-inventory-mobile-card" data-inventory-row="${escapeHTML(row.id)}">
+          <div class="admin-inventory-mobile-head">
+            <div class="admin-inventory-product">
+              <img src="${escapeHTML(row.image)}" alt="" loading="lazy" decoding="async" />
+              <div><strong>${escapeHTML(row.productName)}</strong><small>${escapeHTML(row.category)}</small></div>
+            </div>
+            ${renderBadge(row.stockState)}
+          </div>
+          <dl>
+            <div><dt>Product ID</dt><dd>${escapeHTML(row.productId)}</dd></div>
+            <div><dt>Variant</dt><dd>${escapeHTML(row.variantLabel)}</dd></div>
+            <div><dt>SKU</dt><dd><code>${escapeHTML(row.sku)}</code></dd></div>
+            <div><dt>Current Stock</dt><dd data-inventory-stock-value>${row.stockQuantity.toLocaleString("en-IN")}</dd></div>
+            <div><dt>Low-Stock Threshold</dt><dd>${row.lowStockThreshold.toLocaleString("en-IN")}</dd></div>
+            <div><dt>Variant Status</dt><dd>${renderBadge(row.variantState, "variant")}</dd></div>
+            <div><dt>Last Updated</dt><dd>${escapeHTML(formatOrderDate(row.updatedAt))}</dd></div>
+          </dl>
+          ${renderButton(row)}
+        </article>
+      `).join("");
+    }
+  }
+
+  function getAdminInventoryActivityRows(page) {
+    const search = String($("[data-inventory-activity-search]", page)?.value || "").trim().toLowerCase();
+    const movementType = $("[data-inventory-movement-filter]", page)?.value || "all";
+    const selectedDate = $("[data-inventory-activity-date]", page)?.value || "";
+    return adminInventoryMovements.filter((movement) => {
+      const searchable = [movement.productName, movement.productId, movement.sku, movement.variantLabel]
+        .join(" ")
+        .toLowerCase();
+      if (search && !searchable.includes(search)) return false;
+      if (movementType !== "all" && movement.movementType !== movementType) return false;
+      if (selectedDate) {
+        const createdAt = new Date(movement.createdAt);
+        if (Number.isNaN(createdAt.getTime())) return false;
+        const localDate = [
+          createdAt.getFullYear(),
+          String(createdAt.getMonth() + 1).padStart(2, "0"),
+          String(createdAt.getDate()).padStart(2, "0"),
+        ].join("-");
+        if (localDate !== selectedDate) return false;
+      }
+      return true;
+    });
+  }
+
+  function formatInventoryDelta(value) {
+    if (value > 0) return `+${value}`;
+    if (value < 0) return `\u2212${Math.abs(value)}`;
+    return "0";
+  }
+
+  function renderAdminInventoryActivity(page) {
+    const rows = getAdminInventoryActivityRows(page);
+    const list = $("[data-inventory-activity-list]", page);
+    const empty = $("[data-inventory-activity-empty]", page);
+    const count = $("[data-inventory-activity-count]", page);
+    if (count) count.textContent = `${rows.length.toLocaleString("en-IN")} ${rows.length === 1 ? "movement" : "movements"}`;
+    if (empty) empty.hidden = rows.length > 0;
+    if (!list) return;
+    list.hidden = rows.length === 0;
+    list.innerHTML = rows.map((movement) => `
+      <article class="admin-inventory-activity-item">
+        <div class="admin-inventory-activity-time">
+          <time datetime="${escapeHTML(movement.createdAt)}">${escapeHTML(formatOrderDate(movement.createdAt))}</time>
+          <span class="admin-inventory-movement-type admin-inventory-movement-type--${getAdminInventoryStatusClass(movement.movementType)}">${escapeHTML(movement.movementType)}</span>
+        </div>
+        <div class="admin-inventory-activity-product">
+          <strong>${escapeHTML(movement.productName)}</strong>
+          <span>${escapeHTML(movement.variantLabel)} · <code>${escapeHTML(movement.sku)}</code></span>
+        </div>
+        <div class="admin-inventory-activity-quantity">
+          <strong aria-label="Quantity change ${movement.quantityDelta}">${escapeHTML(formatInventoryDelta(movement.quantityDelta))}</strong>
+          <span>Resulting stock: ${movement.resultingStock.toLocaleString("en-IN")}</span>
+        </div>
+        <div class="admin-inventory-activity-reason">
+          <span>${escapeHTML(movement.reason)}</span>
+          ${movement.orderId ? `<small>Order: ${escapeHTML(movement.orderId)}</small>` : ""}
+        </div>
+      </article>
+    `).join("");
+  }
+
+  function renderAdminInventory(page) {
+    updateAdminInventoryMetrics(page);
+    updateAdminInventoryCategories(page);
+    renderAdminInventoryRows(page);
+    renderAdminInventoryActivity(page);
+  }
+
+  function setAdminInventoryView(page, state) {
+    const loading = $("[data-inventory-loading]", page);
+    const error = $("[data-inventory-error]", page);
+    const content = $("[data-inventory-content]", page);
+    if (loading) loading.hidden = state !== "loading";
+    if (error) error.hidden = state !== "error";
+    if (content) content.hidden = state !== "content";
+  }
+
+  function showAdminInventoryFeedback(page, type, message) {
+    const feedback = $("[data-inventory-feedback]", page);
+    if (!feedback) return;
+    feedback.textContent = message;
+    feedback.className = `admin-inventory-feedback admin-inventory-feedback--${type}`;
+    feedback.hidden = !message;
+  }
+
+  function resetAdminInventoryFilters(page) {
+    const resetValues = {
+      "[data-inventory-search]": "",
+      "[data-inventory-category]": "all",
+      "[data-inventory-stock-filter]": "all",
+      "[data-inventory-active-filter]": "all",
+      "[data-inventory-sort]": "product",
+      "[data-inventory-activity-search]": "",
+      "[data-inventory-movement-filter]": "all",
+      "[data-inventory-activity-date]": "",
+    };
+    Object.entries(resetValues).forEach(([selector, value]) => {
+      const control = $(selector, page);
+      if (control) control.value = value;
+    });
+    const category = $("[data-inventory-category]", page);
+    if (category) category.innerHTML = '<option value="all">All Categories</option>';
+  }
+
+  function resetAdminTabView(page) {
+    $$("[data-admin-tab]", page).forEach((tab) => {
+      const selected = tab.dataset.adminTab === "orders";
+      tab.classList.toggle("is-active", selected);
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+      if (tab.dataset.adminTab === "inventory") tab.hidden = true;
+    });
+    $$("[data-admin-panel]", page).forEach((panel) => {
+      panel.hidden = panel.dataset.adminPanel !== "orders";
+    });
+  }
+
+  function resetAdminInventoryState(page) {
+    adminInventoryLoadGeneration += 1;
+    adminInventoryRows = [];
+    adminInventoryMovements = [];
+    adminInventoryLoadedUserId = null;
+    if (page) {
+      delete page.dataset.adminAuthorizedUserId;
+      setAdminInventoryView(page, "loading");
+      showAdminInventoryFeedback(page, "", "");
+      resetAdminInventoryFilters(page);
+      resetAdminTabView(page);
+      const tableBody = $("[data-inventory-table-body]", page);
+      const mobileList = $("[data-inventory-mobile-list]", page);
+      const activityList = $("[data-inventory-activity-list]", page);
+      $$('[data-inventory-metric]', page).forEach((metric) => { metric.textContent = "0"; });
+      const resultCount = $("[data-inventory-result-count]", page);
+      const activityCount = $("[data-inventory-activity-count]", page);
+      if (resultCount) resultCount.textContent = "0 variants";
+      if (activityCount) activityCount.textContent = "0 movements";
+      if (tableBody) tableBody.innerHTML = "";
+      if (mobileList) mobileList.innerHTML = "";
+      if (activityList) activityList.innerHTML = "";
+    }
+    closeAdminInventoryAdjustment(true);
+  }
+
+  function invalidateAdminAccessForAuthChange() {
+    adminAccessGeneration += 1;
+    const page = $("[data-admin-page]");
+    if (!page || page.dataset.adminBound !== "true") {
+      adminInventoryLoadGeneration += 1;
+      adminInventoryRows = [];
+      adminInventoryMovements = [];
+      adminInventoryLoadedUserId = null;
+      closeAdminInventoryAdjustment(true);
+      return;
+    }
+    page.dataset.adminChecking = "false";
+    setAdminView(page, "loading");
+    hideAdminFeedback(page);
+    resetAdminInventoryState(page);
+    const ordersContainer = $("[data-admin-orders]", page);
+    if (ordersContainer) ordersContainer.innerHTML = "";
+  }
+
+  function isAdminInventoryRequestCurrent(page, userId, loadGeneration, accessGeneration) {
+    return Boolean(
+      page
+      && loadGeneration === adminInventoryLoadGeneration
+      && accessGeneration === adminAccessGeneration
+      && authUser?.id === userId
+      && page.dataset.adminAuthorizedUserId === userId
+    );
+  }
+
+  async function loadAllAdminInventoryVariants(page, userId, loadGeneration, accessGeneration) {
+    const rowsById = new Map();
+    const pageSignatures = new Set();
+    let offset = 0;
+
+    for (let pageNumber = 0; pageNumber < 100; pageNumber += 1) {
+      if (!isAdminInventoryRequestCurrent(page, userId, loadGeneration, accessGeneration)) return null;
+      const { data, error } = await supabaseClient
+        .from("product_variants")
+        .select("id,product_id,sku,variant_label,stock_quantity,low_stock_threshold,is_active,updated_at,products!inner(id,name,category,image,is_active)")
+        .order("product_id", { ascending: true })
+        .order("variant_label", { ascending: true })
+        .order("id", { ascending: true })
+        .range(offset, offset + ADMIN_INVENTORY_PAGE_SIZE - 1);
+      if (!isAdminInventoryRequestCurrent(page, userId, loadGeneration, accessGeneration)) return null;
+      if (error) throw error;
+
+      const pageRows = Array.isArray(data) ? data : [];
+      const signature = JSON.stringify([
+        pageRows.length,
+        String(pageRows[0]?.id || ""),
+        String(pageRows.at(-1)?.id || ""),
+      ]);
+      if (pageRows.length === ADMIN_INVENTORY_PAGE_SIZE && pageSignatures.has(signature)) {
+        throw new Error("Inventory pagination returned a repeated page");
+      }
+      pageSignatures.add(signature);
+      pageRows.forEach((row) => {
+        const id = String(row?.id || "");
+        if (id && !rowsById.has(id)) rowsById.set(id, row);
+      });
+      if (pageRows.length < ADMIN_INVENTORY_PAGE_SIZE) return [...rowsById.values()];
+      offset += ADMIN_INVENTORY_PAGE_SIZE;
+    }
+    throw new Error("Inventory pagination exceeded its safe page limit");
+  }
+
+  async function loadAdminInventory(page, { background = false } = {}) {
+    const userId = authUser?.id;
+    if (!page || !userId || page.dataset.adminAuthorizedUserId !== userId || !supabaseClient) return false;
+    const loadGeneration = ++adminInventoryLoadGeneration;
+    const accessGeneration = adminAccessGeneration;
+    if (!background) setAdminInventoryView(page, "loading");
+    showAdminInventoryFeedback(page, "", "");
+
+    try {
+      const [variantRows, movementResult] = await Promise.all([
+        loadAllAdminInventoryVariants(page, userId, loadGeneration, accessGeneration),
+        supabaseClient
+          .from("inventory_movements")
+          .select("id,product_variant_id,order_id,movement_type,quantity_delta,resulting_stock_quantity,reason,created_at,product_variants!inner(id,product_id,sku,variant_label,products!inner(id,name,category))")
+          .order("created_at", { ascending: false })
+          .limit(100),
+      ]);
+
+      if (!isAdminInventoryRequestCurrent(page, userId, loadGeneration, accessGeneration) || !variantRows) return false;
+      if (movementResult.error) throw movementResult.error;
+
+      adminInventoryRows = variantRows.map(normalizeAdminInventoryRow);
+      const movementsById = new Map();
+      (movementResult.data || []).forEach((movement) => {
+        const normalized = normalizeAdminInventoryMovement(movement);
+        if (normalized.id && !movementsById.has(normalized.id)) movementsById.set(normalized.id, normalized);
+      });
+      adminInventoryMovements = [...movementsById.values()]
+        .sort((first, second) => (
+          new Date(second.createdAt || 0) - new Date(first.createdAt || 0)
+          || second.id.localeCompare(first.id)
+        ));
+      adminInventoryLoadedUserId = userId;
+      renderAdminInventory(page);
+      setAdminInventoryView(page, "content");
+      return true;
+    } catch (error) {
+      if (!isAdminInventoryRequestCurrent(page, userId, loadGeneration, accessGeneration)) return false;
+      console.error("Admin inventory could not be loaded", error);
+      if (background && adminInventoryLoadedUserId === userId) {
+        setAdminInventoryView(page, "content");
+        showAdminInventoryFeedback(page, "error", "Inventory could not be refreshed. Please try again.");
+      } else setAdminInventoryView(page, "error");
+      return false;
+    }
+  }
+
+  function setAdminTab(page, tabName, { focus = false } = {}) {
+    if (!page || page.dataset.adminAuthorizedUserId !== authUser?.id) return;
+    const tabs = $$('[data-admin-tab]', page);
+    const panels = $$('[data-admin-panel]', page);
+    tabs.forEach((tab) => {
+      const selected = tab.dataset.adminTab === tabName;
+      tab.classList.toggle("is-active", selected);
+      tab.setAttribute("aria-selected", String(selected));
+      tab.tabIndex = selected ? 0 : -1;
+      if (selected && focus) tab.focus();
+    });
+    panels.forEach((panel) => {
+      panel.hidden = panel.dataset.adminPanel !== tabName;
+    });
+    if (tabName === "inventory" && adminInventoryLoadedUserId !== authUser?.id) {
+      void loadAdminInventory(page);
+    }
+  }
+
+  function getAdminAdjustmentModal() {
+    return $("[data-inventory-adjust-modal]");
+  }
+
+  function setAdminAdjustmentFeedback(message, type = "error") {
+    const modal = getAdminAdjustmentModal();
+    const feedback = $("[data-adjust-feedback]", modal || document);
+    if (!feedback) return;
+    feedback.textContent = message;
+    feedback.className = `admin-inventory-adjust-feedback admin-inventory-adjust-feedback--${type}`;
+    feedback.hidden = !message;
+  }
+
+  function populateAdminAdjustmentSummary(variant) {
+    const modal = getAdminAdjustmentModal();
+    if (!modal || !variant) return;
+    const values = {
+      "[data-adjust-product-name]": variant.productName,
+      "[data-adjust-product-id]": variant.productId,
+      "[data-adjust-variant-label]": variant.variantLabel,
+      "[data-adjust-sku]": variant.sku,
+      "[data-adjust-current-stock]": variant.stockQuantity.toLocaleString("en-IN"),
+      "[data-adjust-threshold]": variant.lowStockThreshold.toLocaleString("en-IN"),
+      "[data-adjust-stock-state]": variant.stockState,
+      "[data-adjust-active-state]": variant.variantState,
+    };
+    Object.entries(values).forEach(([selector, value]) => {
+      const node = $(selector, modal);
+      if (node) node.textContent = value;
+    });
+  }
+
+  function getAdminAdjustmentDraft() {
+    const modal = getAdminAdjustmentModal();
+    const quantityInput = $("[data-adjust-new-stock]", modal || document);
+    const reasonInput = $("[data-adjust-reason]", modal || document);
+    const rawQuantity = String(quantityInput?.value || "").trim();
+    let newQuantity = null;
+    if (/^\d+$/.test(rawQuantity)) {
+      const parsedQuantity = Number(rawQuantity);
+      if (
+        Number.isSafeInteger(parsedQuantity)
+        && parsedQuantity >= 0
+        && parsedQuantity <= POSTGRESQL_INTEGER_MAX
+      ) newQuantity = parsedQuantity;
+    }
+    return {
+      rawQuantity,
+      newQuantity,
+      reason: String(reasonInput?.value || "").trim(),
+    };
+  }
+
+  function isAdminAdjustmentDraftValid(draft = getAdminAdjustmentDraft()) {
+    return Boolean(
+      adminAdjustmentState
+      && !adminAdjustmentState.submitting
+      && !adminAdjustmentState.refreshing
+      && !adminAdjustmentState.requiresAuthoritativeRefresh
+      && Number.isSafeInteger(draft.newQuantity)
+      && draft.newQuantity !== adminAdjustmentState.expectedQuantity
+      && draft.reason.length >= 3
+      && draft.reason.length <= 500
+    );
+  }
+
+  function updateInventoryAdjustmentFormState() {
+    const modal = getAdminAdjustmentModal();
+    if (!modal) return;
+    const submitting = Boolean(adminAdjustmentState?.submitting);
+    const refreshing = Boolean(adminAdjustmentState?.refreshing);
+    const submit = $("[data-inventory-adjust-submit]", modal);
+    const refresh = $("[data-inventory-adjust-refresh]", modal);
+    const draft = getAdminAdjustmentDraft();
+    const canSubmit = isAdminAdjustmentDraftValid(draft);
+
+    $$('[data-adjust-new-stock], [data-adjust-reason], [data-inventory-adjust-close], [data-inventory-adjust-cancel]', modal)
+      .forEach((control) => { control.disabled = submitting; });
+    if (submit) {
+      submit.disabled = !canSubmit;
+      submit.setAttribute("aria-disabled", String(!canSubmit));
+      submit.setAttribute("aria-busy", String(submitting));
+      submit.textContent = submitting ? "Adjusting..." : "Confirm Adjustment";
+    }
+    if (refresh) {
+      refresh.hidden = !adminAdjustmentState?.requiresAuthoritativeRefresh;
+      refresh.disabled = submitting || refreshing;
+      refresh.setAttribute("aria-disabled", String(refresh.disabled));
+      refresh.setAttribute("aria-busy", String(refreshing));
+      refresh.textContent = refreshing ? "Refreshing..." : "Refresh Inventory";
+    }
+  }
+
+  function getAdminAdjustmentSignature(draft = getAdminAdjustmentDraft()) {
+    if (!adminAdjustmentState) return "";
+    return JSON.stringify([
+      adminAdjustmentState.variant.id,
+      adminAdjustmentState.expectedQuantity,
+      draft.rawQuantity,
+      draft.reason,
+    ]);
+  }
+
+  function updateAdminAdjustmentPreview() {
+    const modal = getAdminAdjustmentModal();
+    const preview = $("[data-adjust-preview]", modal || document);
+    if (!preview || !adminAdjustmentState) return;
+    const draft = getAdminAdjustmentDraft();
+    if (adminAdjustmentState.signature && adminAdjustmentState.signature !== getAdminAdjustmentSignature(draft)) {
+      adminAdjustmentState.signature = null;
+      adminAdjustmentState.idempotencyKey = null;
+    }
+    if (!Number.isSafeInteger(draft.newQuantity)) {
+      preview.textContent = `Current stock: ${adminAdjustmentState.expectedQuantity}. Enter a new quantity to preview the adjustment.`;
+      return;
+    }
+    const delta = draft.newQuantity - adminAdjustmentState.expectedQuantity;
+    preview.textContent = `Current stock: ${adminAdjustmentState.expectedQuantity} · New stock: ${draft.newQuantity} · Adjustment: ${formatInventoryDelta(delta)}`;
+  }
+
+  function setAdminAdjustmentPending(isPending) {
+    if (adminAdjustmentState) adminAdjustmentState.submitting = isPending;
+    updateInventoryAdjustmentFormState();
+  }
+
+  function openAdminInventoryAdjustment(page, variantId, trigger) {
+    if (!page || page.dataset.adminAuthorizedUserId !== authUser?.id) return;
+    const variant = adminInventoryRows.find((row) => row.id === variantId);
+    const modal = getAdminAdjustmentModal();
+    if (!variant || !modal) return;
+    adminAdjustmentReturnFocus = trigger || document.activeElement;
+    adminAdjustmentState = {
+      variant: { ...variant },
+      expectedQuantity: variant.stockQuantity,
+      idempotencyKey: null,
+      signature: null,
+      submitting: false,
+      refreshing: false,
+      requiresAuthoritativeRefresh: false,
+      userId: authUser.id,
+      accessGeneration: adminAccessGeneration,
+    };
+    const form = $("[data-inventory-adjust-form]", modal);
+    form?.reset();
+    $("[data-inventory-adjust-form-view]", modal).hidden = false;
+    $("[data-inventory-adjust-success]", modal).hidden = true;
+    populateAdminAdjustmentSummary(variant);
+    setAdminAdjustmentFeedback("");
+    updateAdminAdjustmentPreview();
+    updateInventoryAdjustmentFormState();
+    modal.hidden = false;
+    modal.setAttribute("aria-hidden", "false");
+    modal.classList.add("is-open");
+    document.body.classList.add("no-scroll");
+    window.requestAnimationFrame(() => $("[data-adjust-new-stock]", modal)?.focus());
+  }
+
+  function clearAdminInventoryAdjustmentContent(modal) {
+    $("[data-inventory-adjust-form]", modal)?.reset();
+    $$([
+      "[data-adjust-product-name]",
+      "[data-adjust-product-id]",
+      "[data-adjust-variant-label]",
+      "[data-adjust-sku]",
+      "[data-adjust-current-stock]",
+      "[data-adjust-threshold]",
+      "[data-adjust-stock-state]",
+      "[data-adjust-active-state]",
+      "[data-adjust-preview]",
+      "[data-adjust-feedback]",
+      "[data-adjust-success-previous]",
+      "[data-adjust-success-new]",
+      "[data-adjust-success-delta]",
+      "[data-adjust-success-movement]",
+    ].join(","), modal).forEach((node) => { node.textContent = ""; });
+    const feedback = $("[data-adjust-feedback]", modal);
+    if (feedback) feedback.hidden = true;
+  }
+
+  function closeAdminInventoryAdjustment(force = false) {
+    const modal = getAdminAdjustmentModal();
+    if (!modal || (modal.hidden && !force)) return;
+    if (adminAdjustmentState?.submitting && !force) return;
+    modal.classList.remove("is-open");
+    modal.setAttribute("aria-hidden", "true");
+    modal.hidden = true;
+    document.body.classList.remove("no-scroll");
+    const returnFocus = adminAdjustmentReturnFocus;
+    adminAdjustmentState = null;
+    adminAdjustmentReturnFocus = null;
+    if (force) clearAdminInventoryAdjustmentContent(modal);
+    updateInventoryAdjustmentFormState();
+    if (!force && returnFocus?.isConnected) returnFocus.focus();
+  }
+
+  function validateAdminAdjustmentForm() {
+    const modal = getAdminAdjustmentModal();
+    const form = $("[data-inventory-adjust-form]", modal || document);
+    const quantityInput = $("[data-adjust-new-stock]", modal || document);
+    const reasonInput = $("[data-adjust-reason]", modal || document);
+    if (!form || !quantityInput || !reasonInput || !adminAdjustmentState) return null;
+    quantityInput.setCustomValidity("");
+    reasonInput.setCustomValidity("");
+    const draft = getAdminAdjustmentDraft();
+    let message = "";
+    if (
+      !draft.rawQuantity
+      || !/^\d+$/.test(draft.rawQuantity)
+      || !Number.isSafeInteger(draft.newQuantity)
+      || draft.newQuantity < 0
+      || draft.newQuantity > POSTGRESQL_INTEGER_MAX
+    ) {
+      message = "Enter a whole stock quantity between 0 and 2147483647.";
+      quantityInput.setCustomValidity(message);
+    } else if (draft.newQuantity === adminAdjustmentState.expectedQuantity) {
+      message = "Stock quantity is already set to this value.";
+      quantityInput.setCustomValidity(message);
+    } else if (draft.reason.length < 3 || draft.reason.length > 500) {
+      message = "Adjustment reason must be between 3 and 500 characters.";
+      reasonInput.setCustomValidity(message);
+    }
+    if (message || !form.checkValidity()) {
+      setAdminAdjustmentFeedback(message || "Please check the adjustment details.");
+      form.reportValidity();
+      updateInventoryAdjustmentFormState();
+      return null;
+    }
+    setAdminAdjustmentFeedback("");
+    updateInventoryAdjustmentFormState();
+    return draft;
+  }
+
+  function isAdminAdjustmentContextCurrent(page, state) {
+    return Boolean(
+      state
+      && adminAdjustmentState === state
+      && authUser?.id === state.userId
+      && page?.dataset.adminAuthorizedUserId === state.userId
+      && adminAccessGeneration === state.accessGeneration
+    );
+  }
+
+  async function refreshAdminAdjustmentAuthoritativeStock(page) {
+    const state = adminAdjustmentState;
+    if (!isAdminAdjustmentContextCurrent(page, state) || state.refreshing) return false;
+    const variantId = state.variant.id;
+    state.requiresAuthoritativeRefresh = true;
+    state.refreshing = true;
+    state.idempotencyKey = null;
+    state.signature = null;
+    updateInventoryAdjustmentFormState();
+    const refreshed = await loadAdminInventory(page, { background: true });
+    if (!isAdminAdjustmentContextCurrent(page, state)) return false;
+    state.refreshing = false;
+    const latest = refreshed ? adminInventoryRows.find((entry) => entry.id === variantId) : null;
+    if (!latest) {
+      state.requiresAuthoritativeRefresh = true;
+      setAdminAdjustmentFeedback("Inventory changed, but the latest quantity could not be loaded. Refresh inventory and try again.");
+      updateInventoryAdjustmentFormState();
+      return false;
+    }
+    state.variant = { ...latest };
+    state.expectedQuantity = latest.stockQuantity;
+    state.requiresAuthoritativeRefresh = false;
+    populateAdminAdjustmentSummary(latest);
+    updateAdminAdjustmentPreview();
+    setAdminAdjustmentFeedback("Inventory changed. The latest quantity has been loaded. Review the adjustment and try again.");
+    updateInventoryAdjustmentFormState();
+    return true;
+  }
+
+  function getAdminAdjustmentErrorMessage(error) {
+    const message = String(error?.message || "").toLowerCase();
+    if (message.includes("authentication required")) return "Authentication required. Please log in again.";
+    if (message.includes("admin access")) return "Administrator access is required.";
+    if (message.includes("not found")) return "This product variant is no longer available.";
+    if (message.includes("non-negative") || message.includes("stock quantities")) return "Enter a valid non-negative stock quantity.";
+    if (message.includes("reason")) return "Adjustment reason must be between 3 and 500 characters.";
+    if (message.includes("already set")) return "Stock quantity is already set to this value.";
+    if (message.includes("inventory changed") || message.includes("refresh the variant")) {
+      return "Inventory changed. The latest quantity has been loaded. Review the adjustment and try again.";
+    }
+    if (message.includes("identifier") || message.includes("different inventory details")) {
+      return "These adjustment details changed. Review them and submit a new attempt.";
+    }
+    return "Inventory could not be adjusted. Please try again.";
+  }
+
+  async function handleAdminAdjustmentSubmit(page, event) {
+    event.preventDefault();
+    if (!adminAdjustmentState || adminAdjustmentState.submitting) return;
+    const adjustmentState = adminAdjustmentState;
+    const draft = validateAdminAdjustmentForm();
+    if (!draft || !isAdminAdjustmentContextCurrent(page, adjustmentState)) return;
+    const signature = getAdminAdjustmentSignature(draft);
+    if (!adminAdjustmentState.idempotencyKey || adminAdjustmentState.signature !== signature) {
+      adminAdjustmentState.idempotencyKey = crypto.randomUUID();
+      adminAdjustmentState.signature = signature;
+    }
+    const requestKey = adminAdjustmentState.idempotencyKey;
+    const userId = adjustmentState.userId;
+    const variantId = adjustmentState.variant.id;
+    const expectedQuantity = adjustmentState.expectedQuantity;
+    setAdminAdjustmentPending(true);
+
+    try {
+      const { data, error } = await supabaseClient.rpc("adjust_variant_stock", {
+        p_product_variant_id: variantId,
+        p_expected_stock_quantity: expectedQuantity,
+        p_new_stock_quantity: draft.newQuantity,
+        p_reason: draft.reason,
+        p_idempotency_key: requestKey,
+      });
+      if (error) throw error;
+      if (!isAdminAdjustmentContextCurrent(page, adjustmentState)) return;
+      const result = Array.isArray(data) ? data[0] : data;
+      if (
+        !result
+        || String(result.product_variant_id || "") !== variantId
+        || !Number.isInteger(Number(result.previous_stock_quantity))
+        || !Number.isInteger(Number(result.new_stock_quantity))
+        || !Number.isInteger(Number(result.quantity_delta))
+        || !result.movement_id
+      ) throw new Error("Invalid inventory adjustment response");
+
+      const row = adminInventoryRows.find((entry) => entry.id === variantId);
+      if (row) {
+        row.stockQuantity = Number(result.new_stock_quantity);
+        row.lowStockThreshold = Number(result.low_stock_threshold);
+        row.stockState = String(result.stock_state || getAdminInventoryStockState(row));
+        row.updatedAt = String(result.adjusted_at || row.updatedAt);
+      }
+      renderAdminInventory(page);
+      await loadAdminInventory(page, { background: true });
+      if (!isAdminAdjustmentContextCurrent(page, adjustmentState)) return;
+
+      const modal = getAdminAdjustmentModal();
+      const successValues = {
+        "[data-adjust-success-previous]": Number(result.previous_stock_quantity).toLocaleString("en-IN"),
+        "[data-adjust-success-new]": Number(result.new_stock_quantity).toLocaleString("en-IN"),
+        "[data-adjust-success-delta]": formatInventoryDelta(Number(result.quantity_delta)),
+        "[data-adjust-success-movement]": String(result.movement_id),
+      };
+      Object.entries(successValues).forEach(([selector, value]) => {
+        const node = $(selector, modal || document);
+        if (node) node.textContent = value;
+      });
+      $("[data-inventory-adjust-form-view]", modal).hidden = true;
+      $("[data-inventory-adjust-success]", modal).hidden = false;
+      setAdminAdjustmentPending(false);
+      $("[data-inventory-adjust-done]", modal)?.focus();
+    } catch (error) {
+      console.error("Inventory adjustment RPC failed", error);
+      if (!isAdminAdjustmentContextCurrent(page, adjustmentState)) return;
+      const isStale = /inventory changed|refresh the variant/i.test(String(error?.message || ""));
+      const isConflict = /identifier|different inventory details/i.test(String(error?.message || ""));
+      if (isStale) {
+        adjustmentState.submitting = false;
+        adjustmentState.requiresAuthoritativeRefresh = true;
+        adjustmentState.idempotencyKey = null;
+        adjustmentState.signature = null;
+        updateInventoryAdjustmentFormState();
+        await refreshAdminAdjustmentAuthoritativeStock(page);
+        return;
+      } else if (isConflict) {
+        adjustmentState.idempotencyKey = null;
+        adjustmentState.signature = null;
+      }
+      setAdminAdjustmentFeedback(getAdminAdjustmentErrorMessage(error));
+      setAdminAdjustmentPending(false);
+    }
+  }
+
+  function trapAdminInventoryModalFocus(event) {
+    const modal = getAdminAdjustmentModal();
+    if (event.key !== "Tab" || !modal || modal.hidden) return;
+    const focusable = $$('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])', modal)
+      .filter((element) => !element.hidden && element.getClientRects().length > 0);
+    if (!focusable.length) return;
+    const preferredFirst = $("[data-adjust-new-stock]", modal);
+    const orderedFocusable = preferredFirst && focusable.includes(preferredFirst)
+      ? [preferredFirst, ...focusable.filter((element) => element !== preferredFirst)]
+      : focusable;
+    const first = orderedFocusable[0];
+    const last = orderedFocusable[orderedFocusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   function getOrderPaymentMethod(value) {
     return value === "COD" ? "Cash on Delivery" : "Not available";
   }
@@ -2329,7 +3202,7 @@
       .join("");
   }
 
-  async function loadAdminOrders(page) {
+  async function loadAdminOrders(page, expectedUserId = authUser?.id, accessGeneration = adminAccessGeneration) {
     hideAdminFeedback(page);
     const container = $("[data-admin-orders]", page);
     if (container) container.innerHTML = `<div class="admin-empty">Loading orders...</div>`;
@@ -2337,6 +3210,11 @@
       .from("orders")
       .select("*, order_items(*)")
       .order("created_at", { ascending: false });
+    if (
+      accessGeneration !== adminAccessGeneration
+      || authUser?.id !== expectedUserId
+      || page.dataset.adminAuthorizedUserId !== expectedUserId
+    ) return;
     if (error) {
       console.error("Admin orders could not be loaded", error);
       showAdminFeedback(page, "error", "Orders could not be loaded. Please try again.");
@@ -2466,12 +3344,17 @@
   }
 
   async function checkAdminAccess(page) {
-    if (!page || page.dataset.adminChecking === "true") return;
+    if (!page) return;
+    const accessGeneration = ++adminAccessGeneration;
     page.dataset.adminChecking = "true";
     setAdminView(page, "loading");
     hideAdminFeedback(page);
+    resetAdminInventoryState(page);
+    const ordersContainer = $("[data-admin-orders]", page);
+    if (ordersContainer) ordersContainer.innerHTML = "";
     try {
       await waitForAuthReady();
+      if (accessGeneration !== adminAccessGeneration) return;
       if (!supabaseClient) {
         setAdminView(page, "denied", "Supabase authentication is unavailable.");
         return;
@@ -2480,20 +3363,27 @@
         setAdminView(page, "login", "Please login to view the admin dashboard.");
         return;
       }
+      const expectedUserId = authUser.id;
       const { data: isAdmin, error } = await supabaseClient.rpc("is_admin");
+      if (accessGeneration !== adminAccessGeneration || authUser?.id !== expectedUserId) return;
       if (error) throw error;
       if (!isAdmin) {
         setAdminView(page, "denied", "Access denied");
         return;
       }
+      page.dataset.adminAuthorizedUserId = expectedUserId;
+      const inventoryTab = $('[data-admin-tab="inventory"]', page);
+      if (inventoryTab) inventoryTab.hidden = false;
       setAdminView(page, "dashboard");
-      await loadAdminOrders(page);
+      setAdminTab(page, "orders");
+      await loadAdminOrders(page, expectedUserId, accessGeneration);
     } catch (error) {
+      if (accessGeneration !== adminAccessGeneration) return;
       console.error("Admin access check failed", error);
       setAdminView(page, "denied", "Access denied");
       showAdminFeedback(page, "error", "Admin access could not be verified. Please try again.");
     } finally {
-      page.dataset.adminChecking = "false";
+      if (accessGeneration === adminAccessGeneration) page.dataset.adminChecking = "false";
     }
   }
 
@@ -2511,6 +3401,8 @@
       if (loginButton) openLogin();
       const refreshButton = event.target.closest("[data-admin-refresh]");
       if (refreshButton) checkAdminAccess(page);
+      const tab = event.target.closest("[data-admin-tab]");
+      if (tab) setAdminTab(page, tab.dataset.adminTab);
       const saveButton = event.target.closest("[data-admin-status-save]");
       if (saveButton) updateAdminOrderStatus(page, saveButton);
       const paymentSaveButton = event.target.closest("[data-admin-payment-status-save]");
@@ -2519,7 +3411,63 @@
       if (approveCancellationButton) reviewAdminOrderCancellation(page, approveCancellationButton, "Approved");
       const rejectCancellationButton = event.target.closest("[data-admin-cancellation-reject]");
       if (rejectCancellationButton) reviewAdminOrderCancellation(page, rejectCancellationButton, "Rejected");
+      const inventoryRefresh = event.target.closest("[data-inventory-refresh], [data-inventory-retry]");
+      if (inventoryRefresh) void loadAdminInventory(page);
+      const clearInventoryFilters = event.target.closest("[data-inventory-clear]");
+      if (clearInventoryFilters) {
+        resetAdminInventoryFilters(page);
+        updateAdminInventoryCategories(page);
+        renderAdminInventoryRows(page);
+        renderAdminInventoryActivity(page);
+      }
+      const adjustButton = event.target.closest("[data-inventory-adjust]");
+      if (adjustButton) openAdminInventoryAdjustment(page, adjustButton.dataset.inventoryAdjust, adjustButton);
     });
+    page.addEventListener("input", (event) => {
+      if (event.target.matches("[data-inventory-search]")) renderAdminInventoryRows(page);
+      if (event.target.matches("[data-inventory-activity-search], [data-inventory-activity-date]")) {
+        renderAdminInventoryActivity(page);
+      }
+    });
+    page.addEventListener("change", (event) => {
+      if (event.target.matches("[data-inventory-category], [data-inventory-stock-filter], [data-inventory-active-filter], [data-inventory-sort]")) {
+        renderAdminInventoryRows(page);
+      }
+      if (event.target.matches("[data-inventory-movement-filter], [data-inventory-activity-date]")) {
+        renderAdminInventoryActivity(page);
+      }
+    });
+    page.addEventListener("keydown", (event) => {
+      const tab = event.target.closest("[data-admin-tab]");
+      if (!tab || !["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      event.preventDefault();
+      const tabs = $$('[data-admin-tab]', page);
+      const currentIndex = tabs.indexOf(tab);
+      const direction = event.key === "ArrowRight" ? 1 : -1;
+      const nextTab = tabs[(currentIndex + direction + tabs.length) % tabs.length];
+      setAdminTab(page, nextTab.dataset.adminTab, { focus: true });
+    });
+
+    const modal = getAdminAdjustmentModal();
+    const form = $("[data-inventory-adjust-form]", modal || document);
+    form?.addEventListener("submit", (event) => void handleAdminAdjustmentSubmit(page, event));
+    modal?.addEventListener("input", (event) => {
+      if (event.target.matches("[data-adjust-new-stock], [data-adjust-reason]")) {
+        setAdminAdjustmentFeedback("");
+        updateAdminAdjustmentPreview();
+        updateInventoryAdjustmentFormState();
+      }
+    });
+    modal?.addEventListener("click", (event) => {
+      if (event.target === modal) closeAdminInventoryAdjustment();
+      if (event.target.closest("[data-inventory-adjust-refresh]")) {
+        void refreshAdminAdjustmentAuthoritativeStock(page);
+      }
+      if (event.target.closest("[data-inventory-adjust-close], [data-inventory-adjust-cancel], [data-inventory-adjust-done]")) {
+        closeAdminInventoryAdjustment();
+      }
+    });
+    modal?.addEventListener("keydown", trapAdminInventoryModalFocus);
     checkAdminAccess(page);
   }
 
@@ -4657,6 +5605,7 @@
           const generation = ++authStateGeneration;
           authReady = true;
           authUser = session?.user || null;
+          invalidateAdminAccessForAuthChange();
           resetCustomerOrdersForAuthChange();
           await synchronizeCollectionOwner(authUser, { migrate: true });
           if (generation !== authStateGeneration) return;
@@ -5137,6 +6086,7 @@
         closeCheckout();
         closeSearch();
         closeLogin();
+        closeAdminInventoryAdjustment();
         closeCustomerOrderDetails();
         closeCustomerCancellation();
         closeCookiePreferences();
