@@ -5,6 +5,35 @@ const { expect, test } = require("@playwright/test");
 
 const screenshotDir = path.join(process.cwd(), "screenshots");
 const productCatalogueFixturePath = path.join(process.cwd(), "tests", "fixtures", "product-catalog-ids.json");
+const productionVariantFeaturePath = path.join(process.cwd(), "variant-checkout-production.js");
+const phase2cStage1MigrationPath = path.join(
+  process.cwd(),
+  "supabase",
+  "migrations",
+  "20260719_enable_variant_checkout_v2.sql",
+);
+const phase2cRunbookPath = path.join(process.cwd(), "docs", "variant-checkout-cutover.md");
+const playwrightConfigPath = path.join(process.cwd(), "playwright.config.js");
+const storefrontPages = [
+  "about.html",
+  "accessories.html",
+  "careers.html",
+  "contact.html",
+  "cookies.html",
+  "faqs.html",
+  "football-shoes.html",
+  "footballs.html",
+  "index.html",
+  "jerseys.html",
+  "my-orders.html",
+  "privacy-policy.html",
+  "products.html",
+  "returns-exchanges.html",
+  "shipping-delivery.html",
+  "t-shirts.html",
+  "terms-conditions.html",
+  "wishlist.html",
+];
 const storefrontProductPages = new Map([
   ["index.html", 16],
   ["products.html", 16],
@@ -2329,6 +2358,191 @@ test("Phase 2B4 submits only authoritative variant IDs and shipping fields, then
   expect(state.cloudCarts[user.id]).toEqual([{ product_id: "phantom-control-pro", quantity: 3 }]);
   expect(state.cloudVariantCarts[user.id]).toEqual([]);
   expect(await page.evaluate(() => localStorage.getItem("attractionCheckoutV2Attempt"))).toBeNull();
+});
+
+test("Phase 2C production feature source is atomic, override-safe, and still dormant", async () => {
+  const source = fs.readFileSync(productionVariantFeaturePath, "utf8");
+
+  expect(source).toContain("variantUi: true");
+  expect(source).toContain("variantCartV2: true");
+  expect(source).toContain("variantCheckoutV2: true");
+  expect(source).toContain("window.__ATTRACTION_FEATURES__ !== undefined");
+  expect(source).not.toMatch(/location\.(?:search|hash)|URLSearchParams|localStorage|sessionStorage|document\.cookie/);
+
+  for (const fileName of storefrontPages) {
+    const html = fs.readFileSync(path.join(process.cwd(), fileName), "utf8");
+    expect(html, `${fileName} must remain production-off before Stage 1`).not.toContain("variant-checkout-production.js");
+    expect(html, `${fileName} must load the shared application`).toContain('src="script.js"');
+  }
+  expect(fs.readFileSync(path.join(process.cwd(), "admin.html"), "utf8"))
+    .not.toContain("variant-checkout-production.js");
+});
+
+test("Phase 2C Stage 1 validates structural protections before changing V2 privileges", async () => {
+  const migration = fs.readFileSync(phase2cStage1MigrationPath, "utf8");
+  const firstPrivilegeMutation = Math.min(
+    migration.indexOf("revoke all on function public.place_order_v2"),
+    migration.indexOf("grant execute on function public.place_order_v2"),
+  );
+
+  expect(firstPrivilegeMutation).toBeGreaterThan(0);
+  for (const requiredProtection of [
+    "The V2 receipt identity primary key is missing or structurally incompatible.",
+    "The V2 receipt user ownership foreign key is missing or incompatible.",
+    "The V2 receipt order-result foreign key is missing or incompatible.",
+    "The V2 receipt SHA-256 payload-hash constraint is missing or incompatible.",
+    "The V2 receipt normalized-payload constraint is missing or incompatible.",
+    "The V2 receipt result-payload constraint is missing or incompatible.",
+    "The V2 receipt completion-state constraint is missing or incompatible.",
+    "The order-item variant/product foreign key is missing or incompatible.",
+    "The nonnegative variant-stock constraint is missing or incompatible.",
+    "The Order Deduction uniqueness protection is missing or incompatible.",
+    "The Cancellation Restoration uniqueness protection is missing or incompatible.",
+  ]) {
+    const protectionPosition = migration.indexOf(requiredProtection);
+    expect(protectionPosition, requiredProtection).toBeGreaterThan(0);
+    expect(protectionPosition, requiredProtection).toBeLessThan(firstPrivilegeMutation);
+  }
+
+  expect(migration).toContain("con.convalidated");
+  expect(migration).toContain("index_definition.indisunique");
+  expect(migration).toContain("index_definition.indisvalid");
+  expect(migration).toContain("index_definition.indisready");
+  expect(migration).toContain("index_definition.indnatts = 2");
+  expect(migration).toContain("array['product_variant_id', 'product_id']::name[]");
+  expect(migration).toContain("array['order_id', 'product_variant_id']::name[]");
+});
+
+test("Phase 2C runbook enforces controlled sequencing evidence and rollback gates", async () => {
+  const runbook = fs.readFileSync(phase2cRunbookPath, "utf8");
+  const dormantCommit = runbook.indexOf("## Dormant Package Commit");
+  const stage1 = runbook.indexOf("## Stage 1: Enable V2 Permission");
+  const stage2 = runbook.indexOf("## Stage 2: Deploy the Frontend");
+  const controlledOrder = runbook.indexOf("## Stage 2 Verification: Controlled Real Order");
+  const stage3 = runbook.indexOf("## Stage 3: Disable Legacy Checkout");
+
+  expect(dormantCommit).toBeGreaterThan(0);
+  expect(dormantCommit).toBeLessThan(stage1);
+  expect(stage1).toBeLessThan(stage2);
+  expect(stage2).toBeLessThan(controlledOrder);
+  expect(controlledOrder).toBeLessThan(stage3);
+
+  for (const requiredEvidence of [
+    "authenticated test user UUID",
+    "current Cancellation Restoration movement count",
+    "exactly one completed V2 receipt was created",
+    "that receipt's `order_id` is the exact new order ID",
+    "`product_name`, `product_category`, `product_image`",
+    "`inventory_deducted_at` remains populated and unchanged",
+    "Mandatory historical V1 integrity check",
+    "restoration_movements_without_v2_deduction",
+    "STOP — DO NOT APPLY STAGE 3",
+  ]) {
+    expect(runbook).toContain(requiredEvidence);
+  }
+
+  const rollbackHeadings = [
+    "### A. Failure Before Stage 1",
+    "### B. Failure After Stage 1 but Before Stage 2 Frontend Deployment",
+    "### C. Stage 2 Deployment Failure",
+    "### D. V2 Functional Failure After Stage 2 but Before Stage 3",
+    "### E. Failure After Stage 3",
+  ];
+  for (const rollbackHeading of rollbackHeadings) {
+    expect(runbook).toContain(rollbackHeading);
+  }
+
+  rollbackHeadings.forEach((heading, index) => {
+    const start = runbook.indexOf(heading);
+    const nextHeading = rollbackHeadings[index + 1];
+    const end = nextHeading ? runbook.indexOf(nextHeading) : runbook.indexOf("## Read-Only Verification Queries");
+    expect(runbook.slice(start, end), heading).toContain("public.adjust_variant_stock(...)");
+  });
+});
+
+test("Phase 2C Playwright server startup never reuses an unverified listener", async () => {
+  const configSource = fs.readFileSync(playwrightConfigPath, "utf8");
+
+  expect(configSource).toContain("const explicitBaseURL = process.env.PLAYWRIGHT_BASE_URL");
+  expect(configSource).toContain("if (!explicitBaseURL)");
+  expect(configSource).toContain("cwd: process.cwd()");
+  expect(configSource).toContain("reuseExistingServer: false");
+  expect(configSource).not.toContain("reuseExistingServer: !process.env.CI");
+  expect(configSource).not.toContain("PLAYWRIGHT_PORT");
+  expect(configSource).not.toContain("4173");
+});
+
+test("Phase 2C production-mode source enters only V2 checkout", async ({ page }) => {
+  const user = {
+    id: "phase2c-production-user",
+    email: "phase2c-production@example.test",
+    user_metadata: { full_name: "Cutover Buyer", phone: "+91 90000 12000" },
+  };
+  const [variant] = createVariantRows("predator-elite-fg", ["UK 8"]);
+  await page.addInitScript({ path: productionVariantFeaturePath });
+  await installSupabaseStub(page, {
+    user,
+    variantRows: [variant],
+    cloudVariantCarts: { [user.id]: [{
+      product_id: "predator-elite-fg",
+      product_variant_id: variant.variant_id,
+      quantity: 1,
+    }] },
+  });
+
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  expect(await page.evaluate(() => window.__ATTRACTION_FEATURES__)).toEqual({
+    variantUi: true,
+    variantCartV2: true,
+    variantCheckoutV2: true,
+  });
+  await openVariantCheckout(page);
+  const modal = await reviewVariantCheckout(page);
+  await modal.locator("[data-cod-confirm-checkbox]").check();
+  await modal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+  await expect(modal.locator("[data-checkout-success-panel]")).toBeVisible();
+
+  const state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(state.placeOrderV2Calls).toHaveLength(1);
+  expect(state.placeOrderCalls).toEqual([]);
+});
+
+test("Phase 2C Playwright override keeps the V1 regression path isolated", async ({ page }) => {
+  const user = {
+    id: "phase2c-v1-regression-user",
+    email: "phase2c-v1-regression@example.test",
+    user_metadata: { full_name: "Legacy Buyer", phone: "+91 90000 12001" },
+  };
+  await page.addInitScript({ path: productionVariantFeaturePath });
+  await page.addInitScript(() => {
+    window.__ATTRACTION_FEATURES__ = {
+      variantUi: false,
+      variantCartV2: false,
+      variantCheckoutV2: false,
+    };
+  });
+  await installSupabaseStub(page, {
+    user,
+    cloudCarts: { [user.id]: [{ product_id: "predator-elite-fg", quantity: 1 }] },
+  });
+
+  await page.goto("/products.html", { waitUntil: "domcontentloaded" });
+  expect(await page.evaluate(() => window.__ATTRACTION_FEATURES__)).toEqual({
+    variantUi: false,
+    variantCartV2: false,
+    variantCheckoutV2: false,
+  });
+  await page.locator(".cart-button").click();
+  await page.locator(".cart-drawer").getByRole("button", { name: "Checkout", exact: true }).click();
+  await fillCheckoutDelivery(page);
+  const modal = await reviewCashOnDeliveryOrder(page);
+  await modal.locator("[data-cod-confirm-checkbox]").check();
+  await modal.getByRole("button", { name: "Confirm Cash on Delivery Order" }).click();
+  await expect(modal.locator("[data-checkout-success-panel]")).toBeVisible();
+
+  const state = await page.evaluate(() => window.__attractionSupabaseTestState);
+  expect(state.placeOrderCalls).toHaveLength(1);
+  expect(state.placeOrderV2Calls).toEqual([]);
 });
 
 for (const scenario of [

@@ -1,6 +1,9 @@
 const { defineConfig } = require("@playwright/test");
 
-module.exports = defineConfig({
+const explicitBaseURL = process.env.PLAYWRIGHT_BASE_URL;
+const baseURL = explicitBaseURL || "http://127.0.0.1:4174";
+
+const config = {
   testDir: "./tests",
   timeout: 30_000,
   expect: {
@@ -8,18 +11,24 @@ module.exports = defineConfig({
   },
   reporter: [["list"]],
   use: {
-    baseURL: "http://127.0.0.1:4173",
+    baseURL,
     browserName: "chromium",
     viewport: { width: 390, height: 844 },
     isMobile: true,
     hasTouch: true,
     actionTimeout: 10_000,
   },
-  webServer: {
-    command: "python3 -m http.server 4173 --bind 127.0.0.1",
-    url: "http://127.0.0.1:4173",
-    reuseExistingServer: !process.env.CI,
+};
+
+if (!explicitBaseURL) {
+  config.webServer = {
+    command: "python3 -m http.server 4174 --bind 127.0.0.1",
+    url: baseURL,
+    cwd: process.cwd(),
+    reuseExistingServer: false,
     stdout: "pipe",
     stderr: "pipe",
-  },
-});
+  };
+}
+
+module.exports = defineConfig(config);
