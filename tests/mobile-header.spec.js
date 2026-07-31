@@ -43,6 +43,10 @@ const storefrontProductPages = new Map([
   ["footballs.html", 20],
   ["accessories.html", 20],
 ]);
+const stage2ProductionRuntimeTests = new Set([
+  "Stage 2 activated storefront pages load without feature-source or console errors",
+  "Stage 2 production mode enters only V2 checkout",
+]);
 
 function readStaticProductCards(fileName) {
   const html = fs.readFileSync(path.join(process.cwd(), fileName), "utf8");
@@ -295,6 +299,15 @@ async function exposeCheckoutTestHooks(page) {
   });
 }
 
+async function forceLegacyVariantFeatures(page) {
+  await page.addInitScript(() => {
+    window.__ATTRACTION_FEATURES__ = {
+      variantUi: false,
+      variantCartV2: false,
+      variantCheckoutV2: false,
+    };
+  });
+}
 
 async function installSupabaseStub(page, options = {}) {
   await page.addInitScript((config) => {
@@ -1298,8 +1311,15 @@ async function logoutCurrentUser(page) {
 }
 
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page }, testInfo) => {
   fs.mkdirSync(screenshotDir, { recursive: true });
+  if (stage2ProductionRuntimeTests.has(testInfo.title)) {
+    await page.addInitScript(() => {
+      localStorage.setItem("attractionCookieConsent", "accepted");
+    });
+    return;
+  }
+  await forceLegacyVariantFeatures(page);
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await page.evaluate(() => {
     localStorage.setItem("attractionCookieConsent", "accepted");
@@ -2360,7 +2380,7 @@ test("Phase 2B4 submits only authoritative variant IDs and shipping fields, then
   expect(await page.evaluate(() => localStorage.getItem("attractionCheckoutV2Attempt"))).toBeNull();
 });
 
-test("Phase 2C production feature source is atomic, override-safe, and still dormant", async () => {
+test("Stage 2 production feature source is atomic, ordered, and admin-excluded", async () => {
   const source = fs.readFileSync(productionVariantFeaturePath, "utf8");
 
   expect(source).toContain("variantUi: true");
@@ -2369,13 +2389,78 @@ test("Phase 2C production feature source is atomic, override-safe, and still dor
   expect(source).toContain("window.__ATTRACTION_FEATURES__ !== undefined");
   expect(source).not.toMatch(/location\.(?:search|hash)|URLSearchParams|localStorage|sessionStorage|document\.cookie/);
 
+  const discoveredStorefrontPages = fs.readdirSync(process.cwd())
+    .filter((fileName) => fileName.endsWith(".html"))
+    .filter((fileName) => fileName !== "admin.html")
+    .filter((fileName) => fs.readFileSync(path.join(process.cwd(), fileName), "utf8").includes('src="script.js"'))
+    .sort();
+  expect(discoveredStorefrontPages).toEqual([...storefrontPages].sort());
+
   for (const fileName of storefrontPages) {
     const html = fs.readFileSync(path.join(process.cwd(), fileName), "utf8");
-    expect(html, `${fileName} must remain production-off before Stage 1`).not.toContain("variant-checkout-production.js");
-    expect(html, `${fileName} must load the shared application`).toContain('src="script.js"');
+    const featureTags = html.match(/<script\s+src="variant-checkout-production\.js"><\/script>/g) || [];
+    const applicationTags = html.match(/<script\s+src="script\.js"(?:\s+defer)?><\/script>/g) || [];
+    expect(featureTags, `${fileName} feature-source count`).toHaveLength(1);
+    expect(applicationTags, `${fileName} application-script count`).toHaveLength(1);
+    expect(
+      html,
+      `${fileName} must load the feature source immediately before script.js`,
+    ).toMatch(
+      /<script src="variant-checkout-production\.js"><\/script>\s*<script src="script\.js"(?: defer)?><\/script>/,
+    );
+    expect(html, `${fileName} must not contain an inline feature assignment`)
+      .not.toContain("window.__ATTRACTION_FEATURES__");
   }
-  expect(fs.readFileSync(path.join(process.cwd(), "admin.html"), "utf8"))
-    .not.toContain("variant-checkout-production.js");
+  const adminHtml = fs.readFileSync(path.join(process.cwd(), "admin.html"), "utf8");
+  expect(adminHtml).toContain('src="script.js"');
+  expect(adminHtml).not.toContain("variant-checkout-production.js");
+});
+
+test("Stage 2 activated storefront pages load without feature-source or console errors", async ({ page, request }) => {
+  test.setTimeout(90_000);
+  const [variant] = createVariantRows("predator-elite-fg", ["UK 8"]);
+  const runtimeErrors = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") runtimeErrors.push(`console: ${message.text()}`);
+  });
+  page.on("pageerror", (error) => runtimeErrors.push(`page: ${error.message}`));
+  await installSupabaseStub(page, { variantRows: [variant] });
+
+  const featureResponse = await request.get("/variant-checkout-production.js");
+  expect(featureResponse.status()).toBe(200);
+
+  for (const fileName of storefrontPages) {
+    const response = await page.goto(`/${fileName}`, { waitUntil: "domcontentloaded" });
+    expect(response?.ok(), `${fileName} document response`).toBe(true);
+    expect(await page.evaluate(() => window.__ATTRACTION_FEATURES__)).toEqual({
+      variantUi: true,
+      variantCartV2: true,
+      variantCheckoutV2: true,
+    });
+    await expect(page.locator("body")).toHaveClass(/variant-preview-enabled/);
+    await expect(page.locator("body")).toHaveClass(/variant-cart-v2-enabled/);
+    await expect(page.locator("body")).toHaveClass(/variant-checkout-v2-enabled/);
+    expect(
+      await page.evaluate(() => performance.getEntriesByType("resource")
+        .some((entry) => new URL(entry.name).pathname.endsWith("/variant-checkout-production.js"))),
+      `${fileName} feature resource`,
+    ).toBe(true);
+    await expectNoHorizontalOverflow(page);
+  }
+
+  await page.setViewportSize({ width: 1391, height: 871 });
+  for (const fileName of ["index.html", "products.html", "my-orders.html"]) {
+    const response = await page.goto(`/${fileName}`, { waitUntil: "domcontentloaded" });
+    expect(response?.ok(), `${fileName} desktop document response`).toBe(true);
+    expect(await page.evaluate(() => window.__ATTRACTION_FEATURES__)).toEqual({
+      variantUi: true,
+      variantCartV2: true,
+      variantCheckoutV2: true,
+    });
+    await expectNoHorizontalOverflow(page);
+  }
+
+  expect(runtimeErrors).toEqual([]);
 });
 
 test("Phase 2C Stage 1 validates structural protections before changing V2 privileges", async () => {
@@ -2472,14 +2557,13 @@ test("Phase 2C Playwright server startup never reuses an unverified listener", a
   expect(configSource).not.toContain("4173");
 });
 
-test("Phase 2C production-mode source enters only V2 checkout", async ({ page }) => {
+test("Stage 2 production mode enters only V2 checkout", async ({ page }) => {
   const user = {
     id: "phase2c-production-user",
     email: "phase2c-production@example.test",
     user_metadata: { full_name: "Cutover Buyer", phone: "+91 90000 12000" },
   };
   const [variant] = createVariantRows("predator-elite-fg", ["UK 8"]);
-  await page.addInitScript({ path: productionVariantFeaturePath });
   await installSupabaseStub(page, {
     user,
     variantRows: [variant],
@@ -2507,20 +2591,13 @@ test("Phase 2C production-mode source enters only V2 checkout", async ({ page })
   expect(state.placeOrderCalls).toEqual([]);
 });
 
-test("Phase 2C Playwright override keeps the V1 regression path isolated", async ({ page }) => {
+test("Stage 2 Playwright override keeps the V1 regression path isolated", async ({ page }) => {
   const user = {
     id: "phase2c-v1-regression-user",
     email: "phase2c-v1-regression@example.test",
     user_metadata: { full_name: "Legacy Buyer", phone: "+91 90000 12001" },
   };
-  await page.addInitScript({ path: productionVariantFeaturePath });
-  await page.addInitScript(() => {
-    window.__ATTRACTION_FEATURES__ = {
-      variantUi: false,
-      variantCartV2: false,
-      variantCheckoutV2: false,
-    };
-  });
+  await forceLegacyVariantFeatures(page);
   await installSupabaseStub(page, {
     user,
     cloudCarts: { [user.id]: [{ product_id: "predator-elite-fg", quantity: 1 }] },
@@ -4496,6 +4573,7 @@ test("same authenticated user sees cloud cart and wishlist changes across browse
 
   try {
     const pageA = await contextA.newPage();
+    await forceLegacyVariantFeatures(pageA);
     await installSharedCloudSupabaseStub(pageA, cloud, user);
     await pageA.goto("/", { waitUntil: "domcontentloaded" });
     await pageA.locator(".product-card").first().getByRole("button", { name: "Add to Cart" }).click();
@@ -4504,6 +4582,7 @@ test("same authenticated user sees cloud cart and wishlist changes across browse
     await expect(pageA.locator(".wishlist-count").first()).toHaveText("1");
 
     const pageB = await contextB.newPage();
+    await forceLegacyVariantFeatures(pageB);
     await installSharedCloudSupabaseStub(pageB, cloud, user);
     await pageB.goto("/", { waitUntil: "domcontentloaded" });
     await expect(pageB.locator(".cart-count")).toHaveText("1");
